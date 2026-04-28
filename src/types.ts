@@ -72,12 +72,34 @@ export interface AgentInfo {
   version?: string | null;
 }
 
+// The four "surfaces" Open Design now produces. Web covers HTML
+// prototypes, decks, docs and templates; Image / Video / Audio cover
+// generated visual / motion / sound artifacts respectively. Every skill
+// and every design system declares one surface; the Examples and
+// Design-systems tabs filter by it so users can navigate the multi-modal
+// catalog without scrolling past surfaces they're not interested in.
+export type Surface = 'web' | 'image' | 'video' | 'audio';
+
 export interface SkillSummary {
   id: string;
   name: string;
   description: string;
   triggers: string[];
-  mode: 'prototype' | 'deck' | 'template' | 'design-system';
+  // 'design-system' is a meta-mode used by the design-systems registry,
+  // not by user-facing skills; the rest map 1:1 onto ProjectKind. Image
+  // / video / audio modes drive the matching project kind so the
+  // 'Use this prompt' fast-create produces a coherent media project.
+  mode:
+    | 'prototype'
+    | 'deck'
+    | 'template'
+    | 'design-system'
+    | 'image'
+    | 'video'
+    | 'audio';
+  /** Which output surface the skill targets — defaults to 'web' for
+   *  backward compatibility when SKILL.md doesn't declare `od.surface`. */
+  surface?: Surface;
   platform?: 'desktop' | 'mobile' | null;
   scenario?: string | null;
   previewType: string;
@@ -113,6 +135,10 @@ export interface DesignSystemSummary {
   /** 4 representative hex strings extracted from DESIGN.md: [bg, support, fg, accent].
    *  Empty when DESIGN.md doesn't expose its tokens in the bold-and-hex format. */
   swatches?: string[];
+  /** Which surface the system targets. Web is the default — most ship
+   *  HTML/CSS tokens. Image / video / audio systems carry palettes,
+   *  shotlists, voice presets etc. that drive non-web generations. */
+  surface?: Surface;
 }
 
 export interface DesignSystemDetail extends DesignSystemSummary {
@@ -122,6 +148,8 @@ export interface DesignSystemDetail extends DesignSystemSummary {
 export type ProjectFileKind =
   | 'html'
   | 'image'
+  | 'video'
+  | 'audio'
   | 'sketch'
   | 'text'
   | 'code'
@@ -147,7 +175,28 @@ export interface ProjectFile {
 // Per-project metadata captured at creation time. The agent reads this
 // during chat (via the system prompt) and the question-form re-asks for
 // any field that's missing. Each `kind` carries a different shape.
-export type ProjectKind = 'prototype' | 'deck' | 'template' | 'other';
+//
+// 'prototype' / 'deck' / 'template' / 'other' all live on the Web
+// surface; 'image' / 'video' / 'audio' are the new media surfaces.
+export type ProjectKind =
+  | 'prototype'
+  | 'deck'
+  | 'template'
+  | 'other'
+  | 'image'
+  | 'video'
+  | 'audio';
+
+// Aspect ratios offered to image / video projects. Kept as a small fixed
+// vocabulary (vs free-form WxH) so the system prompt can describe them
+// to the agent in concrete terms, and so we can render fixed thumbnails
+// in the picker without a custom-input branch.
+export type MediaAspect = '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
+
+// Audio kind — what *kind* of sound the user wants. The model + prompt
+// pattern differ noticeably between music (Suno-style), TTS (MiniMax,
+// Fish), and SFX/foley, so we capture the intent at create time.
+export type AudioKind = 'music' | 'speech' | 'sfx';
 
 export interface ProjectMetadata {
   kind: ProjectKind;
@@ -172,6 +221,35 @@ export interface ProjectMetadata {
   // generated artifact should *also* draw from. Empty / undefined when the
   // user stayed in single-select mode.
   inspirationDesignSystemIds?: string[];
+
+  // -- Image projects ------------------------------------------------
+  // The model the user wants generations to flow through. We keep this
+  // as a free-form string (rather than a strict enum) so new providers
+  // can be wired up by editing skills alone, without a frontend change.
+  imageModel?: string;
+  // Aspect ratio. Defaults to 1:1 if unset. Drives the canvas the agent
+  // requests from the underlying image API.
+  imageAspect?: MediaAspect;
+  // Free-form palette / mood hint. Carried into the system prompt so the
+  // agent can echo the user's style intent into the upstream prompt.
+  imageStyle?: string;
+
+  // -- Video projects ------------------------------------------------
+  videoModel?: string;
+  // Length in seconds. Most providers cap at 10s today; we don't enforce
+  // here — the skill body is the right place to clamp by model.
+  videoLength?: number;
+  videoAspect?: MediaAspect;
+
+  // -- Audio projects ------------------------------------------------
+  audioKind?: AudioKind;
+  audioModel?: string;
+  // Duration in seconds. Music generators interpret this as song length;
+  // TTS uses it as an upper bound on the spoken passage.
+  audioDuration?: number;
+  // Free-form voice description for TTS (e.g. "warm female narrator,
+  // British English"). Ignored for music / SFX.
+  voice?: string;
 }
 
 export interface Project {

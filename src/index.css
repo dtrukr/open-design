@@ -1091,6 +1091,212 @@ code {
   text-align: center;
 }
 
+/* -------- Surface picker (top-level Web/Image/Video/Audio) ----------- */
+.newproj-surfaces {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.newproj-surface {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 10px 9px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  min-width: 0;
+}
+.newproj-surface:hover:not(:disabled) { border-color: var(--border-strong); }
+.newproj-surface.active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.newproj-surface > svg { color: var(--text-muted); }
+.newproj-surface.active > svg { color: var(--accent); }
+.newproj-surface-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.newproj-surface-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* -------- Model / aspect / pill grids (image/video/audio forms) ----- */
+.newproj-textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 60px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.45;
+}
+.newproj-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.model-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.model-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.model-card:hover:not(:disabled) { border-color: var(--border-strong); }
+.model-card.active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.model-card-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+.model-card-hint {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+
+.aspect-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+  gap: 6px;
+}
+.aspect-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px 9px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.aspect-card:hover:not(:disabled) { border-color: var(--border-strong); }
+.aspect-card.active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+}
+.aspect-thumb {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-soft);
+  border-radius: 3px;
+  display: block;
+}
+.aspect-thumb-1x1 { width: 24px; height: 24px; }
+.aspect-thumb-16x9 { width: 32px; height: 18px; }
+.aspect-thumb-9x16 { width: 18px; height: 32px; }
+.aspect-thumb-4x3 { width: 28px; height: 21px; }
+.aspect-thumb-3x4 { width: 21px; height: 28px; }
+.aspect-label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-align: center;
+  white-space: nowrap;
+}
+.aspect-card.active .aspect-label { color: var(--text); }
+
+.pill-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pill-grid-btn {
+  padding: 6px 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.pill-grid-btn:hover:not(:disabled) { border-color: var(--border-strong); }
+.pill-grid-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* -------- Video / audio viewers -------------------------------------- */
+.video-body, .audio-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-subtle);
+  min-height: 0;
+  flex: 1;
+}
+.video-body video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-sm);
+  background: #000;
+  box-shadow: var(--shadow-md, 0 8px 28px rgba(0, 0, 0, 0.18));
+}
+.audio-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 28px 32px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 280px;
+  max-width: 480px;
+  width: 100%;
+  box-shadow: var(--shadow-xs);
+  color: var(--text-muted);
+}
+.audio-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  word-break: break-all;
+  text-align: center;
+}
+.audio-card audio {
+  width: 100%;
+}
+
 /* -------- Fidelity cards (prototype tab) ---------------------------- */
 .fidelity-grid {
   display: grid;

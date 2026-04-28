@@ -1,18 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
+import {
+  AUDIO_MODELS_BY_KIND,
+  DEFAULT_AUDIO_MODEL,
+  DEFAULT_IMAGE_MODEL,
+  DEFAULT_VIDEO_MODEL,
+  IMAGE_MODELS,
+  VIDEO_MODELS,
+} from '../media/models';
 import type {
+  AudioKind,
   DesignSystemSummary,
+  MediaAspect,
   ProjectKind,
   ProjectMetadata,
   ProjectTemplate,
   SkillSummary,
+  Surface,
 } from '../types';
 import { Icon } from './Icon';
 import { Skeleton } from './Loading';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
+// Tabs that live INSIDE the Web surface. Image / Video / Audio surfaces
+// don't expose a tab row — they each have a single, dedicated form.
 export type CreateTab = 'prototype' | 'deck' | 'template' | 'other';
 
 export interface CreateInput {
@@ -38,6 +51,33 @@ const TAB_LABEL_KEYS: Record<CreateTab, keyof Dict> = {
   other: 'newproj.tabOther',
 };
 
+// Per-surface model lists are maintained in src/media/models.ts (and
+// daemon/media-models.js for the dispatcher). Both the picker below and
+// the agent's `od media generate --model …` invocation read the same
+// registry so the metadata captured here is what the daemon dispatches.
+
+// Surface vocab shared by the surface picker and the create-flow.
+const SURFACES: Surface[] = ['web', 'image', 'video', 'audio'];
+
+const SURFACE_LABEL_KEY: Record<Surface, keyof Dict> = {
+  web: 'newproj.surfaceWeb',
+  image: 'newproj.surfaceImage',
+  video: 'newproj.surfaceVideo',
+  audio: 'newproj.surfaceAudio',
+};
+const SURFACE_HINT_KEY: Record<Surface, keyof Dict> = {
+  web: 'newproj.surfaceWebHint',
+  image: 'newproj.surfaceImageHint',
+  video: 'newproj.surfaceVideoHint',
+  audio: 'newproj.surfaceAudioHint',
+};
+const SURFACE_ICON: Record<Surface, 'grid' | 'image' | 'video' | 'music'> = {
+  web: 'grid',
+  image: 'image',
+  video: 'video',
+  audio: 'music',
+};
+
 export function NewProjectPanel({
   skills,
   designSystems,
@@ -47,6 +87,10 @@ export function NewProjectPanel({
   loading = false,
 }: Props) {
   const t = useT();
+  // Top-level surface — controls which sub-form renders below. We keep
+  // it separate from the Web tab state so users can flip between
+  // surfaces without losing their per-surface choices.
+  const [surface, setSurface] = useState<Surface>('web');
   const [tab, setTab] = useState<CreateTab>('prototype');
   const [name, setName] = useState('');
   // Design-system selection is now an *array* internally so the same
@@ -64,12 +108,32 @@ export function NewProjectPanel({
   const [animations, setAnimations] = useState(false);
   const [templateId, setTemplateId] = useState<string | null>(null);
 
+  // Image / Video / Audio metadata. Kept independently so flipping
+  // surfaces preserves each surface's last pick instead of resetting.
+  const [imageModel, setImageModel] = useState<string>(DEFAULT_IMAGE_MODEL);
+  const [imageAspect, setImageAspect] = useState<MediaAspect>('1:1');
+  const [imageStyle, setImageStyle] = useState('');
+  const [videoModel, setVideoModel] = useState<string>(DEFAULT_VIDEO_MODEL);
+  const [videoLength, setVideoLength] = useState<number>(5);
+  const [videoAspect, setVideoAspect] = useState<MediaAspect>('16:9');
+  const [audioKind, setAudioKind] = useState<AudioKind>('music');
+  const [audioModel, setAudioModel] = useState<string>(DEFAULT_AUDIO_MODEL.music);
+  const [audioDuration, setAudioDuration] = useState<number>(30);
+  const [voice, setVoice] = useState('');
+
+  // When the audio kind flips, reset the model to that kind's default.
+  // This keeps users from accidentally creating a "music" project that
+  // has `audioModel: minimax-tts` because they last visited speech.
+  useEffect(() => {
+    setAudioModel(DEFAULT_AUDIO_MODEL[audioKind]);
+  }, [audioKind]);
+
   // When entering the template tab, snap to the first user-saved template
   // if there is one (and we don't already have a valid pick). The template
   // tab no longer offers a built-in fallback — the entire point is to
   // start from a template *the user* created via Share.
   useEffect(() => {
-    if (tab !== 'template') return;
+    if (surface !== 'web' || tab !== 'template') return;
     if (templates.length === 0) {
       setTemplateId(null);
       return;
@@ -77,12 +141,24 @@ export function NewProjectPanel({
     if (templateId == null || !templates.some((t) => t.id === templateId)) {
       setTemplateId(templates[0]!.id);
     }
-  }, [tab, templates, templateId]);
+  }, [surface, tab, templates, templateId]);
 
   // The skill the request still routes through — kept so prototype/deck
   // pick a default-rendered skill (so the agent gets the right SKILL.md
-  // body) without requiring the user to choose one explicitly.
+  // body) without requiring the user to choose one explicitly. For
+  // image / video / audio surfaces we look up a skill that targets that
+  // surface; if none ships yet the request still flies (skill_id null),
+  // and the agent falls back to its base behavior + project metadata.
   const skillIdForTab = useMemo(() => {
+    if (surface === 'image') {
+      return pickDefaultSkill(skills, 'image');
+    }
+    if (surface === 'video') {
+      return pickDefaultSkill(skills, 'video');
+    }
+    if (surface === 'audio') {
+      return pickDefaultSkill(skills, 'audio');
+    }
     if (tab === 'other') return null;
     if (tab === 'prototype') {
       const list = skills.filter((s) => s.mode === 'prototype');
@@ -97,16 +173,18 @@ export function NewProjectPanel({
         ?? null;
     }
     return null;
-  }, [tab, skills]);
+  }, [surface, tab, skills]);
 
-  const canCreate =
-    !loading && (tab !== 'template' || templateId != null);
+  const canCreate = !loading && (
+    surface !== 'web' || tab !== 'template' || templateId != null
+  );
 
   function handleCreate() {
     if (!canCreate) return;
     const primaryDs = selectedDsIds[0] ?? null;
     const inspirations = selectedDsIds.slice(1);
     const metadata = buildMetadata({
+      surface,
       tab,
       fidelity,
       speakerNotes,
@@ -114,32 +192,58 @@ export function NewProjectPanel({
       templateId,
       templates,
       inspirationIds: inspirations,
+      imageModel,
+      imageAspect,
+      imageStyle,
+      videoModel,
+      videoLength,
+      videoAspect,
+      audioKind,
+      audioModel,
+      audioDuration,
+      voice,
     });
+    const fallbackName = surface === 'web'
+      ? autoName(tab, t)
+      : autoNameForSurface(surface, t);
     onCreate({
-      name: name.trim() || autoName(tab, t),
+      name: name.trim() || fallbackName,
       skillId: skillIdForTab,
       designSystemId: primaryDs,
       metadata,
     });
   }
 
+  // Web surface needs a design-system picker; the media surfaces
+  // currently don't bind tokens to a system so we hide it to reduce
+  // noise. (When image/video DS surfaces ship, this will swap to a
+  // surface-filtered picker variant.)
+  const showDesignSystemPicker = surface === 'web';
+
+  // Web surface still uses the four sub-tabs; the media surfaces
+  // skip the row entirely because each has a single dedicated form.
+  const showWebTabs = surface === 'web';
+
   return (
     <div className="newproj">
-      <div className="newproj-tabs" role="tablist">
-        {(Object.keys(TAB_LABEL_KEYS) as CreateTab[]).map((entry) => (
-          <button
-            key={entry}
-            role="tab"
-            aria-selected={tab === entry}
-            className={`newproj-tab ${tab === entry ? 'active' : ''}`}
-            onClick={() => setTab(entry)}
-          >
-            {t(TAB_LABEL_KEYS[entry])}
-          </button>
-        ))}
-      </div>
+      <SurfacePicker value={surface} onChange={setSurface} />
+      {showWebTabs ? (
+        <div className="newproj-tabs" role="tablist">
+          {(Object.keys(TAB_LABEL_KEYS) as CreateTab[]).map((entry) => (
+            <button
+              key={entry}
+              role="tab"
+              aria-selected={tab === entry}
+              className={`newproj-tab ${tab === entry ? 'active' : ''}`}
+              onClick={() => setTab(entry)}
+            >
+              {t(TAB_LABEL_KEYS[entry])}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="newproj-body">
-        <h3 className="newproj-title">{titleForTab(tab, t)}</h3>
+        <h3 className="newproj-title">{titleForView(surface, tab, t)}</h3>
 
         <input
           className="newproj-name"
@@ -148,21 +252,23 @@ export function NewProjectPanel({
           onChange={(e) => setName(e.target.value)}
         />
 
-        <DesignSystemPicker
-          designSystems={designSystems}
-          defaultDesignSystemId={defaultDesignSystemId}
-          selectedIds={selectedDsIds}
-          multi={dsMulti}
-          onChangeMulti={setDsMulti}
-          onChange={setSelectedDsIds}
-          loading={loading}
-        />
+        {showDesignSystemPicker ? (
+          <DesignSystemPicker
+            designSystems={designSystems}
+            defaultDesignSystemId={defaultDesignSystemId}
+            selectedIds={selectedDsIds}
+            multi={dsMulti}
+            onChangeMulti={setDsMulti}
+            onChange={setSelectedDsIds}
+            loading={loading}
+          />
+        ) : null}
 
-        {tab === 'prototype' ? (
+        {surface === 'web' && tab === 'prototype' ? (
           <FidelityPicker value={fidelity} onChange={setFidelity} />
         ) : null}
 
-        {tab === 'deck' ? (
+        {surface === 'web' && tab === 'deck' ? (
           <ToggleRow
             label={t('newproj.toggleSpeakerNotes')}
             hint={t('newproj.toggleSpeakerNotesHint')}
@@ -171,7 +277,7 @@ export function NewProjectPanel({
           />
         ) : null}
 
-        {tab === 'template' ? (
+        {surface === 'web' && tab === 'template' ? (
           <>
             <TemplatePicker
               templates={templates}
@@ -187,25 +293,344 @@ export function NewProjectPanel({
           </>
         ) : null}
 
+        {surface === 'image' ? (
+          <ImageForm
+            model={imageModel}
+            onChangeModel={setImageModel}
+            aspect={imageAspect}
+            onChangeAspect={setImageAspect}
+            style={imageStyle}
+            onChangeStyle={setImageStyle}
+          />
+        ) : null}
+
+        {surface === 'video' ? (
+          <VideoForm
+            model={videoModel}
+            onChangeModel={setVideoModel}
+            length={videoLength}
+            onChangeLength={setVideoLength}
+            aspect={videoAspect}
+            onChangeAspect={setVideoAspect}
+          />
+        ) : null}
+
+        {surface === 'audio' ? (
+          <AudioForm
+            kind={audioKind}
+            onChangeKind={setAudioKind}
+            model={audioModel}
+            onChangeModel={setAudioModel}
+            duration={audioDuration}
+            onChangeDuration={setAudioDuration}
+            voice={voice}
+            onChangeVoice={setVoice}
+          />
+        ) : null}
+
         <button
           className="primary newproj-create"
           onClick={handleCreate}
           disabled={!canCreate}
           title={
-            tab === 'template' && templateId == null
+            surface === 'web' && tab === 'template' && templateId == null
               ? t('newproj.createDisabledTitle')
               : undefined
           }
         >
           <Icon name="plus" size={13} />
           <span>
-            {tab === 'template'
+            {surface === 'web' && tab === 'template'
               ? t('newproj.createFromTemplate')
               : t('newproj.create')}
           </span>
         </button>
       </div>
       <div className="newproj-footer">{t('newproj.privacyFooter')}</div>
+    </div>
+  );
+}
+
+function pickDefaultSkill(
+  skills: SkillSummary[],
+  surface: Surface,
+): string | null {
+  // Prefer a skill that explicitly declares `od.surface: <surface>` AND
+  // matches the corresponding mode. Fall back to mode-only match so even
+  // legacy skills authored without `surface` still get picked up.
+  const surfaceMatch = skills.find(
+    (s) => s.surface === surface && s.mode === surface,
+  );
+  if (surfaceMatch) return surfaceMatch.id;
+  const modeMatch = skills.find((s) => s.mode === surface);
+  if (modeMatch) return modeMatch.id;
+  return null;
+}
+
+function SurfacePicker({
+  value,
+  onChange,
+}: {
+  value: Surface;
+  onChange: (s: Surface) => void;
+}) {
+  const t = useT();
+  return (
+    <div className="newproj-surfaces" role="tablist" aria-label={t('newproj.surfaceLabel')}>
+      {SURFACES.map((s) => (
+        <button
+          key={s}
+          type="button"
+          role="tab"
+          aria-selected={value === s}
+          className={`newproj-surface${value === s ? ' active' : ''}`}
+          onClick={() => onChange(s)}
+        >
+          <Icon name={SURFACE_ICON[s]} size={15} />
+          <span className="newproj-surface-label">{t(SURFACE_LABEL_KEY[s])}</span>
+          <span className="newproj-surface-hint">{t(SURFACE_HINT_KEY[s])}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ImageForm({
+  model,
+  onChangeModel,
+  aspect,
+  onChangeAspect,
+  style,
+  onChangeStyle,
+}: {
+  model: string;
+  onChangeModel: (id: string) => void;
+  aspect: MediaAspect;
+  onChangeAspect: (a: MediaAspect) => void;
+  style: string;
+  onChangeStyle: (s: string) => void;
+}) {
+  const t = useT();
+  return (
+    <>
+      <ModelPicker
+        value={model}
+        onChange={onChangeModel}
+        options={IMAGE_MODELS}
+      />
+      <AspectPicker
+        value={aspect}
+        onChange={onChangeAspect}
+        options={['1:1', '16:9', '9:16', '4:3', '3:4']}
+      />
+      <div className="newproj-section">
+        <label className="newproj-label">{t('newproj.imageStyleLabel')}</label>
+        <textarea
+          className="newproj-textarea"
+          rows={3}
+          placeholder={t('newproj.imageStylePlaceholder')}
+          value={style}
+          onChange={(e) => onChangeStyle(e.target.value)}
+        />
+      </div>
+    </>
+  );
+}
+
+function VideoForm({
+  model,
+  onChangeModel,
+  length,
+  onChangeLength,
+  aspect,
+  onChangeAspect,
+}: {
+  model: string;
+  onChangeModel: (id: string) => void;
+  length: number;
+  onChangeLength: (n: number) => void;
+  aspect: MediaAspect;
+  onChangeAspect: (a: MediaAspect) => void;
+}) {
+  const t = useT();
+  const lengths = [3, 5, 10];
+  return (
+    <>
+      <ModelPicker value={model} onChange={onChangeModel} options={VIDEO_MODELS} />
+      <div className="newproj-section">
+        <label className="newproj-label">{t('newproj.videoLengthLabel')}</label>
+        <div className="pill-grid">
+          {lengths.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`pill-grid-btn${length === s ? ' active' : ''}`}
+              onClick={() => onChangeLength(s)}
+              aria-pressed={length === s}
+            >
+              {t('newproj.videoLengthSeconds', { n: s })}
+            </button>
+          ))}
+        </div>
+      </div>
+      <AspectPicker
+        value={aspect}
+        onChange={onChangeAspect}
+        options={['16:9', '9:16', '1:1']}
+      />
+    </>
+  );
+}
+
+function AudioForm({
+  kind,
+  onChangeKind,
+  model,
+  onChangeModel,
+  duration,
+  onChangeDuration,
+  voice,
+  onChangeVoice,
+}: {
+  kind: AudioKind;
+  onChangeKind: (k: AudioKind) => void;
+  model: string;
+  onChangeModel: (id: string) => void;
+  duration: number;
+  onChangeDuration: (n: number) => void;
+  voice: string;
+  onChangeVoice: (v: string) => void;
+}) {
+  const t = useT();
+  const kinds: { id: AudioKind; labelKey: keyof Dict }[] = [
+    { id: 'music', labelKey: 'newproj.audioKindMusic' },
+    { id: 'speech', labelKey: 'newproj.audioKindSpeech' },
+    { id: 'sfx', labelKey: 'newproj.audioKindSfx' },
+  ];
+  // Music tracks are usually 30s-2min; speech / sfx work in shorter
+  // chunks. We expose three buckets per kind so users don't have to
+  // free-form-input a number.
+  const durations = kind === 'music' ? [30, 60, 120] : [10, 30, 60];
+  return (
+    <>
+      <div className="newproj-section">
+        <label className="newproj-label">{t('newproj.audioKindLabel')}</label>
+        <div className="pill-grid">
+          {kinds.map((k) => (
+            <button
+              key={k.id}
+              type="button"
+              className={`pill-grid-btn${kind === k.id ? ' active' : ''}`}
+              onClick={() => onChangeKind(k.id)}
+              aria-pressed={kind === k.id}
+            >
+              {t(k.labelKey)}
+            </button>
+          ))}
+        </div>
+      </div>
+      <ModelPicker
+        value={model}
+        onChange={onChangeModel}
+        options={AUDIO_MODELS_BY_KIND[kind]}
+      />
+      <div className="newproj-section">
+        <label className="newproj-label">{t('newproj.audioDurationLabel')}</label>
+        <div className="pill-grid">
+          {durations.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`pill-grid-btn${duration === s ? ' active' : ''}`}
+              onClick={() => onChangeDuration(s)}
+              aria-pressed={duration === s}
+            >
+              {t('newproj.audioDurationSeconds', { n: s })}
+            </button>
+          ))}
+        </div>
+      </div>
+      {kind === 'speech' ? (
+        <div className="newproj-section">
+          <label className="newproj-label">{t('newproj.voiceLabel')}</label>
+          <textarea
+            className="newproj-textarea"
+            rows={2}
+            placeholder={t('newproj.voicePlaceholder')}
+            value={voice}
+            onChange={(e) => onChangeVoice(e.target.value)}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function ModelPicker({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  options: { id: string; label: string; hint: string }[];
+}) {
+  const t = useT();
+  return (
+    <div className="newproj-section">
+      <label className="newproj-label">{t('newproj.modelLabel')}</label>
+      <div className="model-grid">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            className={`model-card${value === o.id ? ' active' : ''}`}
+            onClick={() => onChange(o.id)}
+            aria-pressed={value === o.id}
+          >
+            <span className="model-card-name">{o.label}</span>
+            <span className="model-card-hint">{o.hint}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AspectPicker({
+  value,
+  onChange,
+  options,
+}: {
+  value: MediaAspect;
+  onChange: (a: MediaAspect) => void;
+  options: MediaAspect[];
+}) {
+  const t = useT();
+  const labelKeyFor: Record<MediaAspect, keyof Dict> = {
+    '1:1': 'newproj.aspectSquare',
+    '16:9': 'newproj.aspectLandscape',
+    '9:16': 'newproj.aspectPortrait',
+    '4:3': 'newproj.aspect43',
+    '3:4': 'newproj.aspect34',
+  };
+  return (
+    <div className="newproj-section">
+      <label className="newproj-label">{t('newproj.aspectLabel')}</label>
+      <div className="aspect-grid">
+        {options.map((a) => (
+          <button
+            key={a}
+            type="button"
+            className={`aspect-card${value === a ? ' active' : ''}`}
+            onClick={() => onChange(a)}
+            aria-pressed={value === a}
+          >
+            <span className={`aspect-thumb aspect-thumb-${a.replace(':', 'x')}`} aria-hidden />
+            <span className="aspect-label">{t(labelKeyFor[a])}</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -764,6 +1189,7 @@ function fallbackSwatches(seed: string): string[] {
 }
 
 function buildMetadata(input: {
+  surface: Surface;
   tab: CreateTab;
   fidelity: 'wireframe' | 'high-fidelity';
   speakerNotes: boolean;
@@ -771,11 +1197,54 @@ function buildMetadata(input: {
   templateId: string | null;
   templates: ProjectTemplate[];
   inspirationIds: string[];
+  imageModel: string;
+  imageAspect: MediaAspect;
+  imageStyle: string;
+  videoModel: string;
+  videoLength: number;
+  videoAspect: MediaAspect;
+  audioKind: AudioKind;
+  audioModel: string;
+  audioDuration: number;
+  voice: string;
 }): ProjectMetadata {
-  const kind: ProjectKind = input.tab;
   const inspirations = input.inspirationIds.length > 0
     ? { inspirationDesignSystemIds: input.inspirationIds }
     : {};
+
+  if (input.surface === 'image') {
+    return {
+      kind: 'image',
+      imageModel: input.imageModel,
+      imageAspect: input.imageAspect,
+      imageStyle: input.imageStyle.trim() || undefined,
+      ...inspirations,
+    };
+  }
+  if (input.surface === 'video') {
+    return {
+      kind: 'video',
+      videoModel: input.videoModel,
+      videoLength: input.videoLength,
+      videoAspect: input.videoAspect,
+      ...inspirations,
+    };
+  }
+  if (input.surface === 'audio') {
+    return {
+      kind: 'audio',
+      audioKind: input.audioKind,
+      audioModel: input.audioModel,
+      audioDuration: input.audioDuration,
+      voice:
+        input.audioKind === 'speech' && input.voice.trim()
+          ? input.voice.trim()
+          : undefined,
+      ...inspirations,
+    };
+  }
+
+  const kind: ProjectKind = input.tab;
   if (input.tab === 'prototype') {
     return { kind, fidelity: input.fidelity, ...inspirations };
   }
@@ -800,7 +1269,10 @@ function buildMetadata(input: {
   return { kind: 'other', ...inspirations };
 }
 
-function titleForTab(tab: CreateTab, t: TranslateFn): string {
+function titleForView(surface: Surface, tab: CreateTab, t: TranslateFn): string {
+  if (surface === 'image') return t('newproj.titleImage');
+  if (surface === 'video') return t('newproj.titleVideo');
+  if (surface === 'audio') return t('newproj.titleAudio');
   switch (tab) {
     case 'prototype':
       return t('newproj.titlePrototype');
@@ -816,4 +1288,9 @@ function titleForTab(tab: CreateTab, t: TranslateFn): string {
 function autoName(tab: CreateTab, t: TranslateFn): string {
   const stamp = new Date().toLocaleDateString();
   return `${t(TAB_LABEL_KEYS[tab])} · ${stamp}`;
+}
+
+function autoNameForSurface(surface: Surface, t: TranslateFn): string {
+  const stamp = new Date().toLocaleDateString();
+  return `${t(SURFACE_LABEL_KEY[surface])} · ${stamp}`;
 }

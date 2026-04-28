@@ -104,6 +104,19 @@ export interface Dict {
   'entry.loadingWorkspace': string;
 
   // New project panel
+  // Top-level surface picker — sits above the existing tabs and switches
+  // the form between Web (prototype/deck/template/other), Image, Video,
+  // and Audio surfaces.
+  'newproj.surfaceLabel': string;
+  'newproj.surfaceWeb': string;
+  'newproj.surfaceImage': string;
+  'newproj.surfaceVideo': string;
+  'newproj.surfaceAudio': string;
+  'newproj.surfaceWebHint': string;
+  'newproj.surfaceImageHint': string;
+  'newproj.surfaceVideoHint': string;
+  'newproj.surfaceAudioHint': string;
+
   'newproj.tabPrototype': string;
   'newproj.tabDeck': string;
   'newproj.tabTemplate': string;
@@ -112,6 +125,31 @@ export interface Dict {
   'newproj.titleDeck': string;
   'newproj.titleTemplate': string;
   'newproj.titleOther': string;
+  'newproj.titleImage': string;
+  'newproj.titleVideo': string;
+  'newproj.titleAudio': string;
+
+  // Media-specific labels for the Image / Video / Audio forms.
+  'newproj.modelLabel': string;
+  'newproj.modelHint': string;
+  'newproj.aspectLabel': string;
+  'newproj.aspectSquare': string;
+  'newproj.aspectLandscape': string;
+  'newproj.aspectPortrait': string;
+  'newproj.aspect43': string;
+  'newproj.aspect34': string;
+  'newproj.imageStyleLabel': string;
+  'newproj.imageStylePlaceholder': string;
+  'newproj.videoLengthLabel': string;
+  'newproj.videoLengthSeconds': string;
+  'newproj.audioKindLabel': string;
+  'newproj.audioKindMusic': string;
+  'newproj.audioKindSpeech': string;
+  'newproj.audioKindSfx': string;
+  'newproj.audioDurationLabel': string;
+  'newproj.audioDurationSeconds': string;
+  'newproj.voiceLabel': string;
+  'newproj.voicePlaceholder': string;
   'newproj.namePlaceholder': string;
   'newproj.fidelityLabel': string;
   'newproj.fidelityWireframe': string;
@@ -167,6 +205,17 @@ export interface Dict {
   'examples.modePrototypeMobile': string;
   'examples.modeDeck': string;
   'examples.modeDocument': string;
+  'examples.modeImage': string;
+  'examples.modeVideo': string;
+  'examples.modeAudio': string;
+  'examples.surfaceLabel': string;
+  'examples.surfaceWeb': string;
+  'examples.surfaceImage': string;
+  'examples.surfaceVideo': string;
+  'examples.surfaceAudio': string;
+  'examples.tagImage': string;
+  'examples.tagVideo': string;
+  'examples.tagAudio': string;
   'examples.scenarioGeneral': string;
   'examples.scenarioEngineering': string;
   'examples.scenarioProduct': string;
@@ -209,6 +258,12 @@ export interface Dict {
   'ds.categoryUncategorized': string;
   'ds.showcase': string;
   'ds.tokens': string;
+  // Surface filter row in the Design systems tab.
+  'ds.surfaceLabel': string;
+  'ds.surfaceWeb': string;
+  'ds.surfaceImage': string;
+  'ds.surfaceVideo': string;
+  'ds.surfaceAudio': string;
 
   // Avatar menu (project topbar)
   'avatar.title': string;
@@ -358,6 +413,8 @@ export interface Dict {
   'fileViewer.open': string;
   'fileViewer.imageMeta': string;
   'fileViewer.sketchMeta': string;
+  'fileViewer.videoMeta': string;
+  'fileViewer.audioMeta': string;
   'fileViewer.reload': string;
   'fileViewer.reloadDisk': string;
   'fileViewer.copy': string;

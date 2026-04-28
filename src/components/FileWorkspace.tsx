@@ -397,7 +397,7 @@ function Tab({
   onActivate: () => void;
   onClose?: () => void;
   closable?: boolean;
-  kind?: 'html' | 'image' | 'sketch' | 'text' | 'code' | 'binary';
+  kind?: 'html' | 'image' | 'video' | 'audio' | 'sketch' | 'text' | 'code' | 'binary';
 }) {
   const t = useT();
   const iconName = kindIconName(kind);
@@ -439,9 +439,13 @@ function kindIconName(
   | 'image'
   | 'pencil'
   | 'file'
+  | 'video'
+  | 'music'
   | null {
   if (kind === 'html') return 'file-code';
   if (kind === 'image') return 'image';
+  if (kind === 'video') return 'video';
+  if (kind === 'audio') return 'music';
   if (kind === 'sketch') return 'pencil';
   if (kind === 'code') return 'file-code';
   if (kind === 'text') return 'file';

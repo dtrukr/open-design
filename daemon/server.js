@@ -22,6 +22,15 @@ import {
   sanitizeName,
   writeProjectFile,
 } from './projects.js';
+import { generateMedia } from './media.js';
+import {
+  AUDIO_MODELS_BY_KIND,
+  IMAGE_MODELS,
+  VIDEO_MODELS,
+  MEDIA_ASPECTS,
+  VIDEO_LENGTHS_SEC,
+  AUDIO_DURATIONS_SEC,
+} from './media-models.js';
 import {
   deleteConversation,
   deleteProject as dbDeleteProject,
@@ -50,6 +59,10 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const STATIC_DIR = path.join(PROJECT_ROOT, 'dist');
 const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 const DESIGN_SYSTEMS_DIR = path.join(PROJECT_ROOT, 'design-systems');
+// Absolute path to the daemon CLI entry. We inject this into the spawned
+// agent's env as OD_BIN so the agent can run `node "$OD_BIN" media generate …`
+// regardless of whether the user has `od` on PATH.
+const OD_BIN_PATH = path.join(__dirname, 'cli.js');
 const ARTIFACTS_DIR = path.join(PROJECT_ROOT, '.od', 'artifacts');
 const PROJECTS_DIR = path.join(PROJECT_ROOT, '.od', 'projects');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
@@ -650,6 +663,56 @@ export async function startServer({ port = 7456 } = {}) {
     }
   });
 
+  // ---- Media generation -----------------------------------------------------
+  //
+  // Surface-agnostic media dispatcher. The code agent reaches this via
+  // `od media generate` (see daemon/cli.js media subcommand), which is
+  // the unified contract: skills + metadata + system-prompt instruct the
+  // agent on WHAT to produce, the agent invokes ONE entrypoint that
+  // dispatches per (surface, model) and writes the bytes into the project.
+  // The shape of the response matches POST /api/projects/:id/files so the
+  // frontend can refresh the file list with the same code path.
+
+  app.get('/api/media/models', (_req, res) => {
+    res.json({
+      image: IMAGE_MODELS,
+      video: VIDEO_MODELS,
+      audio: AUDIO_MODELS_BY_KIND,
+      aspects: MEDIA_ASPECTS,
+      videoLengthsSec: VIDEO_LENGTHS_SEC,
+      audioDurationsSec: AUDIO_DURATIONS_SEC,
+    });
+  });
+
+  app.post('/api/projects/:id/media/generate', async (req, res) => {
+    try {
+      const projectId = req.params.id;
+      // Ensure the project exists in DB before writing files; this gives
+      // a friendly 404 when the agent calls with a bad id. The agent
+      // normally inherits OD_PROJECT_ID from spawn env so this should
+      // always resolve.
+      const project = getProject(db, projectId);
+      if (!project) return res.status(404).json({ error: 'project not found' });
+      const meta = await generateMedia({
+        projectsRoot: PROJECTS_DIR,
+        projectId,
+        surface: req.body?.surface,
+        model: req.body?.model,
+        prompt: req.body?.prompt,
+        output: req.body?.output,
+        aspect: req.body?.aspect,
+        length: typeof req.body?.length === 'number' ? req.body.length : undefined,
+        duration:
+          typeof req.body?.duration === 'number' ? req.body.duration : undefined,
+        voice: req.body?.voice,
+        audioKind: req.body?.audioKind,
+      });
+      res.json({ file: meta });
+    } catch (err) {
+      res.status(400).json({ error: String(err && err.message ? err.message : err) });
+    }
+  });
+
   // Multi-file upload that the chat composer uses for paste/drop/picker.
   // Files land flat in the project folder; the response carries the same
   // metadata as listFiles so the client can stage them as ChatAttachments
@@ -800,10 +863,20 @@ export async function startServer({ port = 7456 } = {}) {
       cwd,
     });
 
+    // Inject the OD context. Skills + the media-contract prompt tell the
+    // agent how to spend this — call `node "$OD_BIN" media generate
+    // --project "$OD_PROJECT_ID" …` and the daemon dispatches.
+    const odEnv = {
+      OD_BIN: OD_BIN_PATH,
+      OD_DAEMON_URL: `http://127.0.0.1:${port}`,
+      OD_PROJECT_ID: typeof projectId === 'string' ? projectId : '',
+      OD_PROJECT_DIR: cwd || '',
+    };
+
     let child;
     try {
       child = spawn(def.bin, args, {
-        env: { ...process.env },
+        env: { ...process.env, ...odEnv },
         stdio: ['ignore', 'pipe', 'pipe'],
         cwd: cwd || undefined,
       });

@@ -156,6 +156,21 @@ const EXT_MIME = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.avif': 'image/avif',
+  // Video — covered MIMEs are the formats most generators emit. Browsers
+  // play them via <video> / <audio> in the FileViewer with no transcode.
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  // Audio — music / TTS generators commonly produce mp3 / wav / ogg /
+  // m4a; flac is rarer but cheap to support.
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac',
+  '.aac': 'audio/aac',
 };
 
 export function mimeFor(name) {
@@ -174,6 +189,10 @@ export function kindFor(name) {
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif'].includes(ext)) {
     if (name.startsWith('sketch-')) return 'sketch';
     return 'image';
+  }
+  if (['.mp4', '.m4v', '.webm', '.mov'].includes(ext)) return 'video';
+  if (['.mp3', '.wav', '.ogg', '.oga', '.m4a', '.flac', '.aac'].includes(ext)) {
+    return 'audio';
   }
   if (['.md', '.txt'].includes(ext)) return 'text';
   if (['.js', '.mjs', '.cjs', '.ts', '.tsx', '.json', '.css'].includes(ext)) {

@@ -25,12 +25,16 @@ export async function listSkills(skillsRoot) {
       const { data, body } = parseFrontmatter(raw);
       const hasAttachments = await dirHasAttachments(dir);
       const mode = data.od?.mode || inferMode(body, data.description);
+      const surface = normalizeSurface(data.od?.surface, mode);
       out.push({
         id: data.name || entry.name,
         name: data.name || entry.name,
         description: data.description || "",
         triggers: Array.isArray(data.triggers) ? data.triggers : [],
         mode,
+        // Surface defaults to inferring from `mode` so legacy SKILL.md
+        // files (no `od.surface` declared) keep classifying correctly.
+        surface,
         platform: normalizePlatform(
           data.od?.platform,
           mode,
@@ -157,6 +161,20 @@ function inferMode(body, description) {
     return "design-system";
   if (/\btemplate\b/.test(hay)) return "template";
   return "prototype";
+}
+
+// Surface is the high-level output bucket — web, image, video or audio.
+// Authors can pin it via `od.surface`; otherwise we derive from `mode`,
+// then fall back to the safe default ('web') so existing skills classify
+// unchanged.
+const KNOWN_SURFACES = new Set(["web", "image", "video", "audio"]);
+function normalizeSurface(value, mode) {
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (KNOWN_SURFACES.has(v)) return v;
+  }
+  if (mode === "image" || mode === "video" || mode === "audio") return mode;
+  return "web";
 }
 
 // Validate platform tag — only desktop / mobile are meaningful for the

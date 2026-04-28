@@ -4,7 +4,8 @@ import type { Dict } from '../i18n/types';
 import { fetchSkillExample } from '../providers/registry';
 import { exportAsHtml, exportAsPdf, exportAsZip } from '../runtime/exports';
 import { buildSrcdoc } from '../runtime/srcdoc';
-import type { SkillSummary } from '../types';
+import type { SkillSummary, Surface } from '../types';
+import { Icon } from './Icon';
 import { PreviewModal } from './PreviewModal';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
@@ -14,16 +15,73 @@ interface Props {
   onUsePrompt: (skill: SkillSummary) => void;
 }
 
-type ModeFilter = 'all' | 'prototype-desktop' | 'prototype-mobile' | 'deck' | 'document';
+type SurfaceFilter = 'all' | Surface;
+type ModeFilter =
+  | 'all'
+  | 'prototype-desktop'
+  | 'prototype-mobile'
+  | 'deck'
+  | 'document'
+  | 'image'
+  | 'video'
+  | 'audio';
 type ScenarioFilter = string;
 
-const MODE_PILLS: { value: ModeFilter; labelKey: keyof Dict }[] = [
+// Each surface gets its own type pills. We branch on `SURFACE_PILLS` so
+// the mode row reflects what makes sense within the active surface
+// (web has the most granularity; image / video / audio collapse to a
+// single mode pill so the pill count stays reasonable).
+const SURFACE_PILLS: { value: SurfaceFilter; labelKey: keyof Dict; icon: 'grid' | 'image' | 'video' | 'music' | null }[] = [
+  { value: 'all', labelKey: 'examples.modeAll', icon: null },
+  { value: 'web', labelKey: 'examples.surfaceWeb', icon: 'grid' },
+  { value: 'image', labelKey: 'examples.surfaceImage', icon: 'image' },
+  { value: 'video', labelKey: 'examples.surfaceVideo', icon: 'video' },
+  { value: 'audio', labelKey: 'examples.surfaceAudio', icon: 'music' },
+];
+
+const WEB_MODE_PILLS: { value: ModeFilter; labelKey: keyof Dict }[] = [
   { value: 'all', labelKey: 'examples.modeAll' },
   { value: 'prototype-desktop', labelKey: 'examples.modePrototypeDesktop' },
   { value: 'prototype-mobile', labelKey: 'examples.modePrototypeMobile' },
   { value: 'deck', labelKey: 'examples.modeDeck' },
   { value: 'document', labelKey: 'examples.modeDocument' },
 ];
+const IMAGE_MODE_PILLS: { value: ModeFilter; labelKey: keyof Dict }[] = [
+  { value: 'all', labelKey: 'examples.modeAll' },
+  { value: 'image', labelKey: 'examples.modeImage' },
+];
+const VIDEO_MODE_PILLS: { value: ModeFilter; labelKey: keyof Dict }[] = [
+  { value: 'all', labelKey: 'examples.modeAll' },
+  { value: 'video', labelKey: 'examples.modeVideo' },
+];
+const AUDIO_MODE_PILLS: { value: ModeFilter; labelKey: keyof Dict }[] = [
+  { value: 'all', labelKey: 'examples.modeAll' },
+  { value: 'audio', labelKey: 'examples.modeAudio' },
+];
+
+// Convenience — the union pill list for the "All surfaces" view.
+const ALL_MODE_PILLS: { value: ModeFilter; labelKey: keyof Dict }[] = [
+  ...WEB_MODE_PILLS,
+  { value: 'image', labelKey: 'examples.modeImage' },
+  { value: 'video', labelKey: 'examples.modeVideo' },
+  { value: 'audio', labelKey: 'examples.modeAudio' },
+];
+
+function surfaceOf(skill: SkillSummary): Surface {
+  if (skill.surface) return skill.surface;
+  if (skill.mode === 'image') return 'image';
+  if (skill.mode === 'video') return 'video';
+  if (skill.mode === 'audio') return 'audio';
+  return 'web';
+}
+
+function pillsForSurface(surface: SurfaceFilter): { value: ModeFilter; labelKey: keyof Dict }[] {
+  if (surface === 'web') return WEB_MODE_PILLS;
+  if (surface === 'image') return IMAGE_MODE_PILLS;
+  if (surface === 'video') return VIDEO_MODE_PILLS;
+  if (surface === 'audio') return AUDIO_MODE_PILLS;
+  return ALL_MODE_PILLS;
+}
 
 const SCENARIO_LABEL_KEY: Record<string, keyof Dict> = {
   general: 'examples.scenarioGeneral',
@@ -71,13 +129,22 @@ function matchesMode(skill: SkillSummary, filter: ModeFilter): boolean {
   if (filter === 'prototype-mobile')
     return skill.mode === 'prototype' && skill.platform === 'mobile';
   if (filter === 'document') return skill.mode === 'template';
+  if (filter === 'image') return surfaceOf(skill) === 'image';
+  if (filter === 'video') return surfaceOf(skill) === 'video';
+  if (filter === 'audio') return surfaceOf(skill) === 'audio';
   return true;
+}
+
+function matchesSurface(skill: SkillSummary, filter: SurfaceFilter): boolean {
+  if (filter === 'all') return true;
+  return surfaceOf(skill) === filter;
 }
 
 export function ExamplesTab({ skills, onUsePrompt }: Props) {
   const t = useT();
   // Hold preview HTML per skill across re-renders so cards never re-flicker.
   const [previews, setPreviews] = useState<Record<string, string | null>>({});
+  const [surfaceFilter, setSurfaceFilter] = useState<SurfaceFilter>('all');
   const [modeFilter, setModeFilter] = useState<ModeFilter>('all');
   const [scenarioFilter, setScenarioFilter] = useState<ScenarioFilter>('all');
   const [previewSkillId, setPreviewSkillId] = useState<string | null>(null);
@@ -106,32 +173,46 @@ export function ExamplesTab({ skills, onUsePrompt }: Props) {
     [skills, previewSkillId],
   );
 
-  const modeCounts = useMemo(() => {
-    const c: Record<ModeFilter, number> = {
+  const surfaceCounts = useMemo(() => {
+    const counts: Record<SurfaceFilter, number> = {
       all: skills.length,
-      'prototype-desktop': 0,
-      'prototype-mobile': 0,
-      deck: 0,
-      document: 0,
+      web: 0,
+      image: 0,
+      video: 0,
+      audio: 0,
     };
     for (const s of skills) {
-      if (matchesMode(s, 'prototype-desktop')) c['prototype-desktop']++;
-      if (matchesMode(s, 'prototype-mobile')) c['prototype-mobile']++;
-      if (matchesMode(s, 'deck')) c.deck++;
-      if (matchesMode(s, 'document')) c.document++;
+      const sf = surfaceOf(s);
+      counts[sf] = (counts[sf] ?? 0) + 1;
+    }
+    return counts;
+  }, [skills]);
+
+  const surfaceScopedSkills = useMemo(
+    () => skills.filter((s) => matchesSurface(s, surfaceFilter)),
+    [skills, surfaceFilter],
+  );
+
+  const modePills = useMemo(() => pillsForSurface(surfaceFilter), [surfaceFilter]);
+
+  const modeCounts = useMemo(() => {
+    const c: Record<string, number> = { all: surfaceScopedSkills.length };
+    for (const p of modePills) {
+      if (p.value === 'all') continue;
+      c[p.value] = surfaceScopedSkills.filter((s) => matchesMode(s, p.value)).length;
     }
     return c;
-  }, [skills]);
+  }, [surfaceScopedSkills, modePills]);
 
   const scenarioCounts = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const s of skills) {
+    for (const s of surfaceScopedSkills) {
       if (!matchesMode(s, modeFilter)) continue;
       const tag = s.scenario || 'general';
       counts.set(tag, (counts.get(tag) ?? 0) + 1);
     }
     return counts;
-  }, [skills, modeFilter]);
+  }, [surfaceScopedSkills, modeFilter]);
 
   const scenarioOptions = useMemo(() => {
     const have = new Set(scenarioCounts.keys());
@@ -142,7 +223,7 @@ export function ExamplesTab({ skills, onUsePrompt }: Props) {
   }, [scenarioCounts]);
 
   const filtered = useMemo(() => {
-    const matched = skills.filter((s) => {
+    const matched = surfaceScopedSkills.filter((s) => {
       if (!matchesMode(s, modeFilter)) return false;
       if (scenarioFilter === 'all') return true;
       return (s.scenario || 'general') === scenarioFilter;
@@ -159,7 +240,7 @@ export function ExamplesTab({ skills, onUsePrompt }: Props) {
         return a.idx - b.idx;
       })
       .map(({ s }) => s);
-  }, [skills, modeFilter, scenarioFilter]);
+  }, [surfaceScopedSkills, modeFilter, scenarioFilter]);
 
   if (skills.length === 0) {
     return <div className="tab-empty">{t('examples.emptyNoSkills')}</div>;
@@ -171,10 +252,35 @@ export function ExamplesTab({ skills, onUsePrompt }: Props) {
         <div
           className="examples-filter-row"
           role="tablist"
+          aria-label={t('examples.surfaceLabel')}
+        >
+          <span className="examples-filter-label">{t('examples.surfaceLabel')}</span>
+          {SURFACE_PILLS.map((p) => (
+            <button
+              key={p.value}
+              type="button"
+              role="tab"
+              aria-selected={surfaceFilter === p.value}
+              className={`filter-pill ${surfaceFilter === p.value ? 'active' : ''}`}
+              onClick={() => {
+                setSurfaceFilter(p.value);
+                setModeFilter('all');
+                setScenarioFilter('all');
+              }}
+            >
+              {p.icon ? <Icon name={p.icon} size={12} /> : null}
+              {t(p.labelKey)}
+              <span className="filter-pill-count">{surfaceCounts[p.value]}</span>
+            </button>
+          ))}
+        </div>
+        <div
+          className="examples-filter-row"
+          role="tablist"
           aria-label={t('examples.typeLabel')}
         >
           <span className="examples-filter-label">{t('examples.typeLabel')}</span>
-          {MODE_PILLS.map((p) => (
+          {modePills.map((p) => (
             <button
               key={p.value}
               type="button"
@@ -187,7 +293,9 @@ export function ExamplesTab({ skills, onUsePrompt }: Props) {
               }}
             >
               {t(p.labelKey)}
-              <span className="filter-pill-count">{modeCounts[p.value]}</span>
+              <span className="filter-pill-count">
+                {p.value === 'all' ? surfaceScopedSkills.length : (modeCounts[p.value] ?? 0)}
+              </span>
             </button>
           ))}
         </div>
@@ -445,6 +553,9 @@ function ExampleCard({
 }
 
 function tagForSkill(skill: SkillSummary, t: TranslateFn): string {
+  if (skill.mode === 'image') return t('examples.tagImage');
+  if (skill.mode === 'video') return t('examples.tagVideo');
+  if (skill.mode === 'audio') return t('examples.tagAudio');
   if (skill.mode === 'deck') return t('examples.tagSlideDeck');
   if (skill.mode === 'template') return t('examples.tagTemplate');
   if (skill.mode === 'design-system') return t('examples.tagDesignSystem');

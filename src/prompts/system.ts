@@ -33,13 +33,22 @@ import type { ProjectMetadata, ProjectTemplate } from '../types';
 import { OFFICIAL_DESIGNER_PROMPT } from './official-system';
 import { DISCOVERY_AND_PHILOSOPHY } from './discovery';
 import { DECK_FRAMEWORK_DIRECTIVE } from './deck-framework';
+import { MEDIA_GENERATION_CONTRACT } from './media-contract';
 
 export const BASE_SYSTEM_PROMPT = OFFICIAL_DESIGNER_PROMPT;
 
 export interface ComposeInput {
   skillBody?: string | undefined;
   skillName?: string | undefined;
-  skillMode?: 'prototype' | 'deck' | 'template' | 'design-system' | undefined;
+  skillMode?:
+    | 'prototype'
+    | 'deck'
+    | 'template'
+    | 'design-system'
+    | 'image'
+    | 'video'
+    | 'audio'
+    | undefined;
   designSystemBody?: string | undefined;
   designSystemTitle?: string | undefined;
   // Project-level metadata captured by the new-project panel. Drives the
@@ -111,6 +120,24 @@ export function composeSystemPrompt({
     parts.push(`\n\n---\n\n${DECK_FRAMEWORK_DIRECTIVE}`);
   }
 
+  // Image / video / audio surfaces share one invocation contract:
+  // `od media generate`. We pin it LAST (and only when the project is
+  // actually a media surface) so its rules ("don't fabricate bytes",
+  // "shell out to OD_BIN", "reference the returned filename") override
+  // any softer wording earlier in the stack about emitting <artifact>
+  // tags. We fire on either skillMode OR metadata.kind so a media
+  // project without a bound skill still gets the contract.
+  const isMediaSurface =
+    skillMode === 'image' ||
+    skillMode === 'video' ||
+    skillMode === 'audio' ||
+    metadata?.kind === 'image' ||
+    metadata?.kind === 'video' ||
+    metadata?.kind === 'audio';
+  if (isMediaSurface) {
+    parts.push(MEDIA_GENERATION_CONTRACT);
+  }
+
   return parts.join('');
 }
 
@@ -144,6 +171,56 @@ function renderMetadataBlock(
     if (metadata.templateLabel) {
       lines.push(`- **template**: ${metadata.templateLabel}`);
     }
+  }
+  if (metadata.kind === 'image') {
+    lines.push(
+      `- **imageModel**: ${metadata.imageModel ?? '(unknown — ask: which image model to use)'}`,
+    );
+    lines.push(
+      `- **aspectRatio**: ${metadata.imageAspect ?? '(unknown — ask: 1:1, 16:9, 9:16, 4:3, 3:4)'}`,
+    );
+    if (metadata.imageStyle) {
+      lines.push(`- **styleNotes**: ${metadata.imageStyle}`);
+    }
+    lines.push('');
+    lines.push(
+      'This is an **image** project. Plan the prompt carefully — describe subject, composition, lighting, palette, and references — then dispatch via the **media generation contract** (see the contract block at the end of this prompt) using `od media generate --surface image --model <imageModel>`. Reference the returned filename in your reply. Do NOT emit `<artifact>` HTML for media surfaces.',
+    );
+  }
+  if (metadata.kind === 'video') {
+    lines.push(
+      `- **videoModel**: ${metadata.videoModel ?? '(unknown — ask: which video model to use)'}`,
+    );
+    lines.push(
+      `- **lengthSeconds**: ${typeof metadata.videoLength === 'number' ? metadata.videoLength : '(unknown — ask: 3s / 5s / 10s)'}`,
+    );
+    lines.push(
+      `- **aspectRatio**: ${metadata.videoAspect ?? '(unknown — ask: 16:9, 9:16, 1:1)'}`,
+    );
+    lines.push('');
+    lines.push(
+      'This is a **video** project. Plan the shotlist (1-3 shots for short clips), describe motion + camera, then dispatch via the **media generation contract** using `od media generate --surface video --model <videoModel> --length <seconds> --aspect <ratio>`. If the active workspace also ships a hyperframes-style interactive-video skill, prefer composing several shorter clips into a timeline rather than one monolithic generation. Do NOT emit `<artifact>` HTML.',
+    );
+  }
+  if (metadata.kind === 'audio') {
+    lines.push(
+      `- **audioKind**: ${metadata.audioKind ?? '(unknown — ask: music / speech / sfx)'}`,
+    );
+    lines.push(
+      `- **audioModel**: ${metadata.audioModel ?? '(unknown — ask: which audio model to use)'}`,
+    );
+    lines.push(
+      `- **durationSeconds**: ${typeof metadata.audioDuration === 'number' ? metadata.audioDuration : '(unknown — ask: target duration)'}`,
+    );
+    if (metadata.voice) {
+      lines.push(`- **voice**: ${metadata.voice}`);
+    } else if (metadata.audioKind === 'speech') {
+      lines.push('- **voice**: (unknown — ask: voice / accent / pacing)');
+    }
+    lines.push('');
+    lines.push(
+      'This is an **audio** project. Music: lock genre + tempo + instrumentation. Speech: confirm script + voice + pacing. SFX: be precise about texture (impact, ambience, foley layer). Then dispatch via the **media generation contract** using `od media generate --surface audio --audio-kind <kind> --model <audioModel> --duration <seconds>` (add `--voice <voice-id>` for speech). Do NOT emit `<artifact>` HTML.',
+    );
   }
 
   if (metadata.inspirationDesignSystemIds && metadata.inspirationDesignSystemIds.length > 0) {

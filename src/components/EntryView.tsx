@@ -330,6 +330,30 @@ function metadataForSkill(skill: SkillSummary): ProjectMetadata {
         typeof skill.animations === 'boolean' ? skill.animations : false,
     };
   }
+  // Media surfaces — defaults match the new-project form so the
+  // 'Use this prompt' fast-create produces sensible metadata even
+  // when the SKILL.md doesn't pin a specific model. Skills can pin
+  // a model later via `od.image_model` etc.; for now we fall back to
+  // the surface's first default.
+  if (kind === 'image') {
+    return { kind, imageModel: 'gpt-image-2', imageAspect: '1:1' };
+  }
+  if (kind === 'video') {
+    return {
+      kind,
+      videoModel: 'seedance-2',
+      videoLength: 5,
+      videoAspect: '16:9',
+    };
+  }
+  if (kind === 'audio') {
+    return {
+      kind,
+      audioKind: 'music',
+      audioModel: 'suno-v5',
+      audioDuration: 30,
+    };
+  }
   return { kind: 'other' };
 }
 
@@ -337,5 +361,8 @@ function kindForSkill(skill: SkillSummary): ProjectKind {
   if (skill.mode === 'deck') return 'deck';
   if (skill.mode === 'prototype') return 'prototype';
   if (skill.mode === 'template') return 'template';
+  if (skill.mode === 'image') return 'image';
+  if (skill.mode === 'video') return 'video';
+  if (skill.mode === 'audio') return 'audio';
   return 'other';
 }
