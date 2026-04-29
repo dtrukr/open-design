@@ -69,7 +69,7 @@ export async function streamChatCompletions(
 
     if (!resp.ok || !resp.body) {
       const text = await resp.text().catch(() => '');
-      handlers.onError(new Error(`upstream ${resp.status}: ${text || 'no body'}`));
+      handlers.onError(new Error(classifyHttpError(resp.status, text)));
       return;
     }
 
@@ -77,23 +77,34 @@ export async function streamChatCompletions(
     const decoder = new TextDecoder();
     let buf = '';
 
-    while (true) {
+    streamLoop: while (true) {
       const { value, done } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-      // Frames are separated by a blank line. Split on \n\n; the trailing
-      // partial frame stays in buf for the next iteration.
-      let idx: number;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const frame = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 2);
+      // Frames are separated by a blank line. The SSE spec permits LF or
+      // CRLF, so split on /\r?\n\r?\n/ — splitting on '\n\n' alone breaks
+      // for any upstream that emits CRLF (some Cloudflare-fronted proxies,
+      // certain LiteLLM configs, Azure on a bad day). The trailing partial
+      // frame stays in buf for the next read.
+      while (true) {
+        const m = buf.match(/\r?\n\r?\n/);
+        if (!m || m.index === undefined) break;
+        const idx = m.index;
+        const frame = buf.slice(0, idx).replace(/\r/g, '').trim();
+        buf = buf.slice(idx + m[0].length);
         if (!frame) continue;
         // Each frame is one or more `data: ...` lines plus optional
         // `event:` / comments. We only care about `data:` payloads.
         for (const line of frame.split('\n')) {
           if (!line.startsWith('data:')) continue;
           const payload = line.slice(5).trim();
-          if (!payload || payload === '[DONE]') continue;
+          if (!payload) continue;
+          if (payload === '[DONE]') {
+            // Stop reading — a misbehaving / proxied endpoint may keep
+            // the SSE socket open after [DONE] and we don't want the
+            // client to block on a half-open stream.
+            break streamLoop;
+          }
           let parsed: unknown;
           try {
             parsed = JSON.parse(payload);
@@ -125,7 +136,37 @@ function extractDelta(payload: unknown): string {
   }
   // Some legacy / completion-style proxies emit `text` instead of delta.
   if (typeof first?.text === 'string') return first.text;
+  // Non-text deltas (delta.tool_calls, delta.function_call,
+  // delta.reasoning_content for DeepSeek-R1 / OpenAI o-series) are not
+  // bridged into the Anthropic-shaped message stream the rest of the app
+  // consumes — the OpenAI/Azure/Google paths are text-only today. The
+  // limitation is documented in Settings (`settings.providerHint`) and
+  // the README provider table.
   return '';
+}
+
+// Map upstream HTTP failures to a one-line message a BYOK user can act on
+// without scrolling a JSON wall. The raw status + body are preserved as
+// a tail so the developer console still has the full context.
+export function classifyHttpError(status: number, body: string): string {
+  const tail = body ? ` — ${truncate(body, 240)}` : '';
+  if (status === 401 || status === 403) {
+    return `Authentication failed (${status}) — check the API key in Settings.${tail}`;
+  }
+  if (status === 404) {
+    return `Endpoint not found (404) — verify the Base URL and model id.${tail}`;
+  }
+  if (status === 429) {
+    return `Rate-limited (429) — try a smaller model or wait a moment.${tail}`;
+  }
+  if (status >= 500) {
+    return `Upstream error (${status}) — try again.${tail}`;
+  }
+  return `upstream ${status}: ${body || 'no body'}`;
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n)}…` : s;
 }
 
 function joinUrl(base: string, path: string): string {

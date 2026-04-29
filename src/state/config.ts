@@ -20,6 +20,10 @@ export function loadConfig(): AppConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_CONFIG };
     const parsed = JSON.parse(raw) as Partial<AppConfig>;
+    // The spread-merge IS the migration path: any field added to
+    // DEFAULT_CONFIG (e.g. `provider`, `apiVersion`) lands on existing
+    // localStorage configs that predate it. Keep the spread — replacing
+    // it with `parsed ?? DEFAULT_CONFIG` would break the round-trip.
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
     return { ...DEFAULT_CONFIG };

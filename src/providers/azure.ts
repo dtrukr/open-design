@@ -9,7 +9,12 @@ import type { AppConfig, ChatMessage } from '../types';
 import type { StreamHandlers } from './anthropic';
 import { streamChatCompletions } from './openai';
 
-const DEFAULT_API_VERSION = '2024-08-01-preview';
+// Azure rotates `-preview` api-versions aggressively, so default to the
+// latest stable GA tag. Users on a newer/older deployment can override
+// in Settings → API version. Reference table:
+// https://learn.microsoft.com/azure/ai-services/openai/api-version-deprecation
+const DEFAULT_API_VERSION = '2024-10-21';
+let loggedApiVersion = false;
 
 export async function streamAzure(
   cfg: AppConfig,
@@ -36,6 +41,14 @@ export async function streamAzure(
   }
 
   const apiVersion = (cfg.apiVersion?.trim() || DEFAULT_API_VERSION);
+  // Log once per session so debugging an api-version mismatch (e.g. a
+  // deployment that only exposes a newer preview tag) is a single
+  // glance at the console instead of spelunking through DevTools.
+  if (!loggedApiVersion) {
+    loggedApiVersion = true;
+    // eslint-disable-next-line no-console
+    console.info(`[azure] using api-version=${apiVersion}`);
+  }
   const url = buildAzureUrl(cfg.baseUrl, cfg.model, apiVersion);
 
   const body = {

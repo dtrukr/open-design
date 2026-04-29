@@ -17,7 +17,7 @@ export interface AppConfig {
   baseUrl: string;
   model: string;
   // Azure OpenAI only — the api-version query string the Azure REST
-  // surface requires (e.g. '2024-08-01-preview'). Ignored by every other
+  // surface requires (e.g. '2024-10-21'). Ignored by every other
   // provider so the same config can round-trip through localStorage.
   apiVersion?: string;
   agentId: string | null;

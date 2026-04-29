@@ -76,10 +76,10 @@ export const zhCN: Dict = {
     '请求会从当前浏览器直连你设置的 Base URL，无中转代理。Key 只存放在 localStorage。',
   'settings.providerLabel': '渠道',
   'settings.providerHint':
-    '选择请求格式。Anthropic 也涵盖任意 Anthropic 兼容代理；OpenAI 兼容涵盖 OpenRouter、LiteLLM、DeepSeek、Groq、Together 等。',
+    '选择请求格式。Anthropic 也涵盖任意 Anthropic 兼容代理；OpenAI 兼容涵盖 OpenRouter、LiteLLM、DeepSeek、Groq、Together 等。OpenAI / Azure / Google 渠道目前仅桥接文本，工具调用、视觉与推理内容尚未转发。',
   'settings.apiVersion': 'API version',
   'settings.apiVersionHint':
-    'Azure 的 api-version 查询参数（如 2024-08-01-preview）。留空则使用默认值。',
+    'Azure 的 api-version 查询参数（如 2024-10-21）。留空则使用默认值。Azure 会定期淘汰旧版本，请参考官方版本弃用表确认。',
   'settings.proxyHint':
     '提示：若要在浏览器里使用 AWS Bedrock 或 Google Vertex 上的 Anthropic 模型，建议在服务器端跑一个 LiteLLM 代理，再把 Anthropic 渠道指向它 —— 凭证签名应留在服务器，不放进浏览器。',
   'settings.skipForNow': '暂时跳过',

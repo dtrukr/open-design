@@ -12,7 +12,10 @@
  * Vertex) which is unsafe to do from the browser with long-lived BYOK
  * credentials. The recommended path is to run LiteLLM (or a similar
  * proxy) server-side and point the `anthropic` or `openai` provider at
- * that proxy's URL — the provider chooser surfaces this guidance.
+ * that proxy's URL — the provider chooser surfaces this guidance. See
+ * the LiteLLM provider docs for the exact passthrough configs:
+ *   AWS Bedrock: https://docs.litellm.ai/docs/providers/bedrock
+ *   GCP Vertex:  https://docs.litellm.ai/docs/providers/vertex_ai
  */
 import type { ModelProvider } from '../types';
 
@@ -100,9 +103,8 @@ export const PROVIDER_ORDER: ModelProvider[] = [
   'google',
 ];
 
-// True when the provider's wire format expects a deployment-specific URL
-// rather than a generic baseUrl + path. Today only Azure qualifies — kept
-// as a helper so callers don't have to memorize that.
+// Display name for `provider` — falls back to the raw id if a future
+// caller hands us something not in PROVIDER_PRESETS.
 export function providerLabel(provider: ModelProvider): string {
   return PROVIDER_PRESETS[provider]?.label ?? provider;
 }

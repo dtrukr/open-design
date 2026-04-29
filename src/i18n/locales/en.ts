@@ -77,10 +77,10 @@ export const en: Dict = {
     'Calls go directly from this browser to the base URL you set. No proxy. The key never leaves localStorage.',
   'settings.providerLabel': 'Provider',
   'settings.providerHint':
-    'Pick the wire format. Anthropic also covers any Anthropic-compatible proxy. OpenAI-compatible covers OpenRouter, LiteLLM, DeepSeek, Groq, Together, etc.',
+    'Pick the wire format. Anthropic also covers any Anthropic-compatible proxy. OpenAI-compatible covers OpenRouter, LiteLLM, DeepSeek, Groq, Together, etc. The OpenAI / Azure / Google paths bridge text only — tool calls, vision, and reasoning content are not forwarded yet.',
   'settings.apiVersion': 'API version',
   'settings.apiVersionHint':
-    'Azure REST api-version (e.g. 2024-08-01-preview). Leave blank to use the default.',
+    'Azure REST api-version (e.g. 2024-10-21). Leave blank to use the default. Azure rotates these tags — the official deprecation table lists which versions are still live.',
   'settings.proxyHint':
     'Tip: For AWS Bedrock or Google Vertex with Anthropic models, run a server-side proxy (LiteLLM works well) and point the Anthropic provider at it — credential signing belongs on the server, not the browser.',
   'settings.skipForNow': 'Skip for now',

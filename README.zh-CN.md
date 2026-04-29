@@ -521,7 +521,9 @@ Daemon 启动时从 `PATH` 自动检测，无需配置。
 | **Azure OpenAI** | `/openai/deployments/<deployment>/chat/completions` SSE + `api-key` 头 | Azure 托管的 OpenAI 部署。Base URL 是资源终结点，Model 是部署名，再加 Azure 的 `api-version` |
 | **Google Gemini** | `:streamGenerateContent?alt=sse` | Google Generative Language API 直连（Gemini 系列） |
 
-**关于 AWS Bedrock 与 GCP Vertex 上的 Anthropic 模型：**两者都需要凭证签名（SigV4 / GCP service-account JWT），用浏览器里长期存放的 BYOK 凭证去签是不安全的。推荐做法：在服务器端跑一个代理（[LiteLLM](https://docs.litellm.ai/) 同时支持 Anthropic 兼容和 OpenAI 兼容），把 `Anthropic` 或 `OpenAI 兼容` 渠道的 Base URL 指向代理，签名留在服务器端。
+**目前 OpenAI、Azure、Google 渠道仅桥接文本。**`Anthropic` 渠道（含任意 Anthropic 兼容代理）会传递完整事件流，其他三条路径只转发文本增量 —— `delta.tool_calls` / `delta.function_call` / `delta.reasoning_content`（DeepSeek-R1、OpenAI o-series）以及 Gemini 的 `parts[*].functionCall` / `parts[*].inlineData` 都会被丢弃。如果某个 skill 或 artifact prompt 依赖工具调用或视觉，请暂时留在 `Anthropic` 渠道。
+
+**关于 AWS Bedrock 与 GCP Vertex 上的 Anthropic 模型：**两者都需要凭证签名（SigV4 / GCP service-account JWT），用浏览器里长期存放的 BYOK 凭证去签是不安全的。推荐做法：在服务器端跑一个代理（[LiteLLM](https://docs.litellm.ai/) 同时支持 Anthropic 兼容和 OpenAI 兼容 —— 具体配置见 [Bedrock](https://docs.litellm.ai/docs/providers/bedrock) 与 [Vertex AI](https://docs.litellm.ai/docs/providers/vertex_ai) 文档），把 `Anthropic` 或 `OpenAI 兼容` 渠道的 Base URL 指向代理，签名留在服务器端。
 
 加第五种报文格式很机械：`ModelProvider` 里加一行、[`src/providers/presets.ts`](src/providers/presets.ts) 里加一项、和 [`anthropic.ts` / `openai.ts` / `azure.ts` / `google.ts`](src/providers/) 一起放一个 `stream<X>` 函数、[`src/providers/model.ts`](src/providers/model.ts) 里再加一个 `case`。
 

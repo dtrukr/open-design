@@ -44,36 +44,44 @@ export function SettingsDialog({
   const setMode = (mode: ExecMode) => setCfg((c) => ({ ...c, mode }));
 
   // Switching providers swaps in that provider's defaults, but preserves
-  // any non-empty values the user already typed — they may have a custom
-  // baseUrl (e.g. an OpenRouter URL while staying on the openai provider)
-  // they don't want clobbered. Empty fields fall back to the preset.
+  // values the user has actually typed. The heuristic: a baseUrl/model
+  // that matches the *previous* provider's preset is treated as
+  // auto-injected (welcome dialog or an earlier provider switch) and
+  // replaced with the new preset; anything else is left alone. Empty
+  // fields also fall back to the new preset. Without this check, picking
+  // Anthropic in onboarding then switching to OpenAI would leave the
+  // Anthropic baseUrl in place and produce a 404 on first send.
   const setProvider = (provider: ModelProvider) => {
     setCfg((c) => {
       if (c.provider === provider) return c;
-      const preset = PROVIDER_PRESETS[provider];
+      const prev = PROVIDER_PRESETS[c.provider];
+      const next = PROVIDER_PRESETS[provider];
+      const baseValue = c.baseUrl?.trim() ?? '';
+      const modelValue = c.model?.trim() ?? '';
+      const baseLooksPreset = !baseValue || baseValue === prev.baseUrl;
+      const modelLooksPreset = !modelValue || modelValue === prev.defaultModel;
       return {
         ...c,
         provider,
-        baseUrl: c.baseUrl?.trim() ? c.baseUrl : preset.baseUrl,
-        model: c.model?.trim() ? c.model : preset.defaultModel,
+        baseUrl: baseLooksPreset ? next.baseUrl : c.baseUrl,
+        model: modelLooksPreset ? next.defaultModel : c.model,
       };
     });
   };
 
   const activePreset = PROVIDER_PRESETS[cfg.provider];
 
+  // Every provider stream client refuses to send without a base URL
+  // (Azure has no global default; the others would otherwise pass an
+  // empty string straight through to fetch). Require it up front so the
+  // user can't save a config that fails the first time they hit Send.
   const canSave =
     cfg.mode === 'daemon'
       ? Boolean(cfg.agentId && agents.find((a) => a.id === cfg.agentId)?.available)
       : Boolean(
           cfg.apiKey.trim() &&
             cfg.model.trim() &&
-            // Azure has no global default base URL — require the user to
-            // paste their resource endpoint. Other providers ship a usable
-            // default so a blank field falls back to the preset.
-            (cfg.provider === 'azure'
-              ? cfg.baseUrl.trim().length > 0
-              : true),
+            cfg.baseUrl.trim().length > 0,
         );
 
   return (
@@ -291,7 +299,7 @@ export function SettingsDialog({
                 <input
                   type="text"
                   value={cfg.apiVersion ?? ''}
-                  placeholder="2024-08-01-preview"
+                  placeholder="2024-10-21"
                   onChange={(e) =>
                     setCfg({ ...cfg, apiVersion: e.target.value })
                   }
