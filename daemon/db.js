@@ -9,18 +9,28 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 let dbInstance = null;
+let dbFile = null;
 
-export function openDatabase(projectRoot) {
-  if (dbInstance) return dbInstance;
-  const dir = path.join(projectRoot, '.od');
-  fs.mkdirSync(dir, { recursive: true });
+export function openDatabase(projectRoot, { dataDir } = {}) {
+  const dir = dataDir ? path.resolve(dataDir) : path.join(projectRoot, '.od');
   const file = path.join(dir, 'app.sqlite');
+  if (dbInstance && dbFile === file) return dbInstance;
+  if (dbInstance) closeDatabase();
+  fs.mkdirSync(dir, { recursive: true });
   const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   migrate(db);
   dbInstance = db;
+  dbFile = file;
   return db;
+}
+
+export function closeDatabase() {
+  if (!dbInstance) return;
+  dbInstance.close();
+  dbInstance = null;
+  dbFile = null;
 }
 
 function migrate(db) {

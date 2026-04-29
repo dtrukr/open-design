@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createHtmlArtifactManifest } from '../artifacts/manifest';
 import { createArtifactParser } from '../artifacts/parser';
 import { useT } from '../i18n';
 import { streamMessage } from '../providers/anthropic';
@@ -12,6 +13,7 @@ import {
 import { composeSystemPrompt } from '../prompts/system';
 import { navigate } from '../router';
 import { agentDisplayName } from '../utils/agentLabels';
+import type { TodoItem } from '../runtime/todos';
 import {
   createConversation,
   deleteConversation as deleteConversationApi,
@@ -570,7 +572,19 @@ export function ProjectView({
       }
       if (savedArtifactRef.current === fileName) return;
       savedArtifactRef.current = fileName;
-      const file = await writeProjectTextFile(project.id, fileName, art.html);
+      const manifest = createHtmlArtifactManifest({
+        entry: fileName,
+        title: art.title || art.identifier || fileName,
+        sourceSkillId: project.skillId ?? undefined,
+        designSystemId: project.designSystemId,
+        metadata: {
+          identifier: art.identifier,
+          inferred: false,
+        },
+      });
+      const file = await writeProjectTextFile(project.id, fileName, art.html, {
+        artifactManifest: manifest,
+      });
       if (file) {
         setFilesRefresh((n) => n + 1);
         // Auto-open the freshly-persisted artifact as a tab so the user
@@ -580,6 +594,27 @@ export function ProjectView({
       }
     },
     [project.id, projectFiles, requestOpenFile],
+  );
+
+  const handleContinueRemainingTasks = useCallback(
+    (_assistantMessage: ChatMessage, todos: TodoItem[]) => {
+      if (streaming || todos.length === 0) return;
+      const remainingList = todos
+        .map((todo, i) => {
+          const label =
+            todo.status === 'in_progress' && todo.activeForm ? todo.activeForm : todo.content;
+          return `${i + 1}. [${todo.status}] ${label}`;
+        })
+        .join('\n');
+      const prompt =
+        'Continue the remaining unfinished tasks from the previous run. ' +
+        'Do not redo completed work. Focus only on these unfinished todos:\n\n' +
+        `${remainingList}\n\n` +
+        'Before making changes, inspect the current project files as needed. ' +
+        'Update TodoWrite as you complete each remaining task.';
+      void handleSend(prompt, []);
+    },
+    [streaming, handleSend],
   );
 
   const handleExportAsPptx = useCallback(
@@ -781,6 +816,7 @@ export function ProjectView({
             if (streaming) return;
             void handleSend(text, []);
           }}
+          onContinueRemainingTasks={handleContinueRemainingTasks}
           onNewConversation={handleNewConversation}
           conversations={conversations}
           activeConversationId={activeConversationId}

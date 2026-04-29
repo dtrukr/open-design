@@ -15,8 +15,10 @@ import {
 } from './agents.js';
 import { listSkills } from './skills.js';
 import { listDesignSystems, readDesignSystem } from './design-systems.js';
+import { attachAcpSession } from './acp.js';
 import { createClaudeStreamHandler } from './claude-stream.js';
 import { createCopilotStreamHandler } from './copilot-stream.js';
+import { createJsonEventStreamHandler } from './json-event-stream.js';
 import { renderDesignSystemPreview } from './design-system-preview.js';
 import { renderDesignSystemShowcase } from './design-system-showcase.js';
 import { importClaudeDesignZip } from './claude-design-import.js';
@@ -32,6 +34,7 @@ import {
   sanitizeName,
   writeProjectFile,
 } from './projects.js';
+import { validateArtifactManifestInput } from './artifact-manifest.js';
 import {
   deleteConversation,
   deleteProject as dbDeleteProject,
@@ -60,8 +63,11 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const STATIC_DIR = path.join(PROJECT_ROOT, 'dist');
 const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills');
 const DESIGN_SYSTEMS_DIR = path.join(PROJECT_ROOT, 'design-systems');
-const ARTIFACTS_DIR = path.join(PROJECT_ROOT, '.od', 'artifacts');
-const PROJECTS_DIR = path.join(PROJECT_ROOT, '.od', 'projects');
+const RUNTIME_DATA_DIR = process.env.OD_DATA_DIR
+  ? path.resolve(process.env.OD_DATA_DIR)
+  : path.join(PROJECT_ROOT, '.od');
+const ARTIFACTS_DIR = path.join(RUNTIME_DATA_DIR, 'artifacts');
+const PROJECTS_DIR = path.join(RUNTIME_DATA_DIR, 'projects');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 
 const UPLOAD_DIR = path.join(os.tmpdir(), 'od-uploads');
@@ -157,10 +163,10 @@ function sendMulterError(res, err) {
   return res.status(500).json({ code: 'UPLOAD_ERROR', error: 'upload failed' });
 }
 
-export async function startServer({ port = 7456 } = {}) {
+export async function startServer({ port = 7456, returnServer = false } = {}) {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
-  const db = openDatabase(PROJECT_ROOT);
+  const db = openDatabase(PROJECT_ROOT, { dataDir: RUNTIME_DATA_DIR });
 
   // Warm agent-capability probes (e.g. whether the installed Claude Code
   // build advertises --include-partial-messages) so the first /api/chat
@@ -779,15 +785,23 @@ export async function startServer({ port = 7456 } = {}) {
           fs.promises.unlink(req.file.path).catch(() => {});
           return res.json({ file: meta });
         }
-        const { name, content, encoding } = req.body || {};
+        const { name, content, encoding, artifactManifest } = req.body || {};
         if (typeof name !== 'string' || typeof content !== 'string') {
           return res.status(400).json({ error: 'name and content required' });
+        }
+        if (artifactManifest !== undefined && artifactManifest !== null) {
+          const validated = validateArtifactManifestInput(artifactManifest, name);
+          if (!validated.ok) {
+            return res.status(400).json({ error: `invalid artifactManifest: ${validated.error}` });
+          }
         }
         const buf =
           encoding === 'base64'
             ? Buffer.from(content, 'base64')
             : Buffer.from(content, 'utf8');
-        const meta = await writeProjectFile(PROJECTS_DIR, req.params.id, name, buf);
+        const meta = await writeProjectFile(PROJECTS_DIR, req.params.id, name, buf, {
+          artifactManifest,
+        });
         res.json({ file: meta });
       } catch (err) {
         res.status(500).json({ error: 'upload failed' });
@@ -952,7 +966,7 @@ export async function startServer({ port = 7456 } = {}) {
         ? def.reasoningOptions.find((r) => r.id === reasoning)?.id ?? null
         : null;
     const agentOptions = { model: safeModel, reasoning: safeReasoning };
-    const args = def.buildArgs(composed, safeImages, extraAllowedDirs, agentOptions);
+    const args = def.buildArgs(composed, safeImages, extraAllowedDirs, agentOptions, { cwd });
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1021,12 +1035,13 @@ export async function startServer({ port = 7456 } = {}) {
     });
 
     let child;
+    let acpSession = null;
     try {
       // When the agent definition sets `promptViaStdin`, pipe the composed
       // prompt through stdin instead of embedding it in argv. Bypasses the
       // OS command-line length limit (Windows CreateProcess caps at ~32 KB)
       // which causes `spawn ENAMETOOLONG` for any non-trivial prompt.
-      const stdinMode = def.promptViaStdin ? 'pipe' : 'ignore';
+      const stdinMode = def.promptViaStdin || def.streamFormat === 'acp-json-rpc' ? 'pipe' : 'ignore';
       child = spawn(resolvedBin, args, {
         env: { ...process.env },
         stdio: [stdinMode, 'pipe', 'pipe'],
@@ -1065,6 +1080,20 @@ export async function startServer({ port = 7456 } = {}) {
       const copilot = createCopilotStreamHandler((ev) => send('agent', ev));
       child.stdout.on('data', (chunk) => copilot.feed(chunk));
       child.on('close', () => copilot.flush());
+    } else if (def.streamFormat === 'acp-json-rpc') {
+      acpSession = attachAcpSession({
+        child,
+        prompt: composed,
+        cwd: cwd || PROJECT_ROOT,
+        model: safeModel,
+        send,
+      });
+    } else if (def.streamFormat === 'json-event-stream') {
+      const handler = createJsonEventStreamHandler(def.eventParser || def.id, (ev) =>
+        send('agent', ev),
+      );
+      child.stdout.on('data', (chunk) => handler.feed(chunk));
+      child.on('close', () => handler.flush());
     } else {
       child.stdout.on('data', (chunk) => send('stdout', { chunk }));
     }
@@ -1082,6 +1111,9 @@ export async function startServer({ port = 7456 } = {}) {
       res.end();
     });
     child.on('close', (code, signal) => {
+      if (acpSession?.hasFatalError()) {
+        return res.end();
+      }
       send('end', { code, signal });
       res.end();
     });
@@ -1096,7 +1128,12 @@ export async function startServer({ port = 7456 } = {}) {
   }
 
   return new Promise((resolve) => {
-    app.listen(port, '127.0.0.1', () => resolve(`http://localhost:${port}`));
+    const server = app.listen(port, '127.0.0.1', () => {
+      const address = server.address();
+      const actualPort = typeof address === 'object' && address ? address.port : port;
+      const url = `http://127.0.0.1:${actualPort}`;
+      resolve(returnServer ? { url, server } : url);
+    });
   });
 }
 
