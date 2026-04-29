@@ -28,6 +28,11 @@ import {
   writeProjectFile,
 } from './projects.js';
 import {
+  isDocumentFile,
+  parseDocument,
+  validateDocument,
+} from './document-parser.js';
+import {
   deleteConversation,
   deleteProject as dbDeleteProject,
   deleteTemplate,
@@ -659,6 +664,7 @@ export async function startServer({ port = 7456 } = {}) {
   // Files land flat in the project folder; the response carries the same
   // metadata as listFiles so the client can stage them as ChatAttachments
   // without a separate refetch.
+  // For PPTX/Word files, automatically parse and extract content.
   app.post(
     '/api/projects/:id/upload',
     projectUpload.array('files', 12),
@@ -666,16 +672,72 @@ export async function startServer({ port = 7456 } = {}) {
       try {
         const incoming = Array.isArray(req.files) ? req.files : [];
         const out = [];
+        const projectDir = await ensureProject(PROJECTS_DIR, req.params.id);
+        
         for (const f of incoming) {
           try {
-            const stat = await fs.promises.stat(f.path);
-            out.push({
-              name: f.filename,
-              path: f.filename,
-              size: stat.size,
-              mtime: stat.mtimeMs,
-              originalName: f.originalname,
-            });
+            // Check if this is a document file (PPTX/Word)
+            if (isDocumentFile(f.originalname)) {
+              const validation = validateDocument(f);
+              if (!validation.valid) {
+                console.warn(`Document validation failed: ${validation.errors.join(', ')}`);
+                // Still add the file, but log the issue
+              }
+              
+              try {
+                // Parse the document and extract content
+                const { summary, extractedFiles } = await parseDocument(f.path, projectDir);
+                
+                // Add the original file to output
+                const stat = await fs.promises.stat(f.path);
+                out.push({
+                  name: f.filename,
+                  path: f.filename,
+                  size: stat.size,
+                  mtime: stat.mtimeMs,
+                  originalName: f.originalname,
+                  documentParsed: true,
+                  documentSummary: summary,
+                });
+                
+                // Add all extracted files to output
+                for (const extracted of extractedFiles) {
+                  const extractedPath = path.join(projectDir, extracted.name);
+                  const extractedStat = await fs.promises.stat(extractedPath);
+                  out.push({
+                    name: extracted.name,
+                    path: extracted.name,
+                    size: extractedStat.size,
+                    mtime: extractedStat.mtimeMs,
+                    originalName: extracted.name,
+                    extractedFrom: f.originalname,
+                  });
+                }
+              } catch (parseErr) {
+                console.error(`Failed to parse document ${f.originalname}:`, parseErr);
+                // Fall back to just uploading the file without parsing
+                const stat = await fs.promises.stat(f.path);
+                out.push({
+                  name: f.filename,
+                  path: f.filename,
+                  size: stat.size,
+                  mtime: stat.mtimeMs,
+                  originalName: f.originalname,
+                  documentParsed: false,
+                  parseError: parseErr.message,
+                });
+              }
+            } else {
+              // Regular file (non-document)
+              const stat = await fs.promises.stat(f.path);
+              out.push({
+                name: f.filename,
+                path: f.filename,
+                size: stat.size,
+                mtime: stat.mtimeMs,
+                originalName: f.originalname,
+              });
+            }
           } catch {
             // skip files that vanished mid-flight
           }

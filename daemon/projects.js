@@ -156,6 +156,11 @@ const EXT_MIME = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.avif': 'image/avif',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pdf': 'application/pdf',
 };
 
 export function mimeFor(name) {
@@ -178,6 +183,9 @@ export function kindFor(name) {
   if (['.md', '.txt'].includes(ext)) return 'text';
   if (['.js', '.mjs', '.cjs', '.ts', '.tsx', '.json', '.css'].includes(ext)) {
     return 'code';
+  }
+  if (['.docx', '.doc', '.pptx', '.ppt', '.pdf'].includes(ext)) {
+    return 'document';
   }
   return 'binary';
 }

@@ -146,12 +146,22 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
     async function uploadFiles(files: File[]) {
       if (files.length === 0) return;
+      
+      // Check for documents
+      const hasDocuments = files.some(f => looksLikeDocument(f.name));
+      
       const id = await ensureProject();
       if (!id) return;
       setUploading(true);
       try {
         const attachments = await uploadProjectFiles(id, files);
         setStaged((s) => [...s, ...attachments]);
+        
+        // If documents were uploaded, log processing info
+        if (hasDocuments) {
+          const docCount = files.filter(f => looksLikeDocument(f.name)).length;
+          console.log(`Processed ${docCount} document(s) - extracted text and images available in project files`);
+        }
       } finally {
         setUploading(false);
       }
@@ -290,6 +300,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               ref={fileInputRef}
               type="file"
               multiple
+              accept="image/*,.pdf,.docx,.doc,.pptx,.ppt"
               style={{ display: "none" }}
               onChange={(e) => {
                 const files = Array.from(e.target.files ?? []);
@@ -483,6 +494,10 @@ function MentionPopover({
 
 function looksLikeImage(name: string): boolean {
   return /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(name);
+}
+
+function looksLikeDocument(name: string): boolean {
+  return /\.(docx?|pptx?|pdf)$/i.test(name);
 }
 
 function prettySize(bytes: number): string {
