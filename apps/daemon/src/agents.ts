@@ -146,14 +146,15 @@ export const AGENT_DEFS = [
     name: 'Codex CLI',
     bin: 'codex',
     versionArgs: ['--version'],
-    // Codex doesn't have a `models` subcommand; ship the most common ids
-    // as a hint. Users can supply other ids via the custom-model input.
+    // Codex doesn't have a `models` subcommand; ship current ChatGPT-account
+    // compatible ids as hints. Users can supply other ids via the custom-model
+    // input.
     fallbackModels: [
       DEFAULT_MODEL_OPTION,
-      { id: 'gpt-5-codex', label: 'gpt-5-codex' },
-      { id: 'gpt-5', label: 'gpt-5' },
-      { id: 'o3', label: 'o3' },
-      { id: 'o4-mini', label: 'o4-mini' },
+      { id: 'gpt-5.5', label: 'gpt-5.5' },
+      { id: 'gpt-5.4', label: 'gpt-5.4' },
+      { id: 'gpt-5.4-mini', label: 'gpt-5.4-mini' },
+      { id: 'gpt-5.2', label: 'gpt-5.2' },
     ],
     reasoningOptions: [
       { id: 'default', label: 'Default' },

@@ -26,7 +26,7 @@ export function loadConfig(): AppConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_CONFIG };
     const parsed = JSON.parse(raw) as Partial<AppConfig>;
-    return { ...DEFAULT_CONFIG, ...parsed };
+    return migrateConfig({ ...DEFAULT_CONFIG, ...parsed });
   } catch {
     return { ...DEFAULT_CONFIG };
   }
@@ -34,4 +34,18 @@ export function loadConfig(): AppConfig {
 
 export function saveConfig(config: AppConfig): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+}
+
+function migrateConfig(config: AppConfig): AppConfig {
+  if (config.agentModels?.codex?.model !== 'gpt-5-codex') return config;
+  return {
+    ...config,
+    agentModels: {
+      ...config.agentModels,
+      codex: {
+        ...config.agentModels.codex,
+        model: 'default',
+      },
+    },
+  };
 }
