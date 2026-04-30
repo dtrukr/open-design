@@ -13,6 +13,7 @@ import type {
   ProjectMetadata,
   ProjectTemplate,
 } from '../types';
+import { newClientId } from '../utils/id';
 
 export async function listProjects(): Promise<Project[]> {
   try {
@@ -44,7 +45,7 @@ export async function createProject(input: {
   metadata?: ProjectMetadata;
 }): Promise<{ project: Project; conversationId: string } | null> {
   try {
-    const id = crypto.randomUUID();
+    const id = newClientId();
     const resp = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
