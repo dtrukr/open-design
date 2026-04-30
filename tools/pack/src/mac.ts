@@ -393,7 +393,6 @@ async function runElectronBuilder(
       output: paths.appBuilderOutputRoot,
     },
     dmg: {
-      background: macResources.dmgBackground,
       icon: macResources.icon,
       iconSize: 96,
       title: `${PRODUCT_NAME}-${namespaceToken}`,

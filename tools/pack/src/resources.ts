@@ -29,11 +29,8 @@ export const toolsPackRoot = resolveToolsPackRoot(dirname(fileURLToPath(import.m
 export const resourcesRoot = join(toolsPackRoot, "resources");
 
 export const macResources = {
-  dmgBackground: join(resourcesRoot, "mac", "dmg-background.png"),
   entitlements: join(resourcesRoot, "mac", "entitlements.mac.plist"),
   entitlementsInherit: join(resourcesRoot, "mac", "entitlements.mac.inherit.plist"),
   icon: join(resourcesRoot, "mac", "icon.icns"),
-  iconPng: join(resourcesRoot, "mac", "icon.png"),
-  iconSvg: join(resourcesRoot, "mac", "icon.svg"),
   notarizeHook: join(resourcesRoot, "mac", "notarize.cjs"),
 } as const;
