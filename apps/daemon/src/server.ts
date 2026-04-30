@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import { composeSystemPrompt } from './prompts/system.js';
 import {
   detectAgents,
   getAgentDef,
@@ -23,6 +24,7 @@ import { createCopilotStreamHandler } from './copilot-stream.js';
 import { createJsonEventStreamHandler } from './json-event-stream.js';
 import { renderDesignSystemPreview } from './design-system-preview.js';
 import { renderDesignSystemShowcase } from './design-system-showcase.js';
+import { createChatRunService } from './runs.js';
 import { importClaudeDesignZip } from './claude-design-import.js';
 import { buildDocumentPreview } from './document-preview.js';
 import { lintArtifact, renderFindingsForAgent } from './lint-artifact.js';
@@ -48,7 +50,9 @@ import {
   insertConversation,
   insertProject,
   insertTemplate,
+  listProjectsAwaitingInput,
   listConversations,
+  listLatestProjectRunStatuses,
   listMessages,
   listProjects,
   listTabs,
@@ -103,6 +107,20 @@ const promptFileBootstrap = (fp) =>
   'it contains the system prompt, design system, skill workflow, and user request. ' +
   'Do not begin your response until you have read the entire file.';
 export const SSE_KEEPALIVE_INTERVAL_MS = 25_000;
+
+export function normalizeProjectDisplayStatus(status) {
+  return status === 'starting' || status === 'queued' ? 'running' : status;
+}
+
+export function composeProjectDisplayStatus(baseStatus, awaitingInputProjects, projectId) {
+  if (baseStatus.value === 'succeeded' && awaitingInputProjects.has(projectId)) {
+    return { ...baseStatus, value: 'awaiting_input' };
+  }
+  return {
+    ...baseStatus,
+    value: normalizeProjectDisplayStatus(baseStatus.value),
+  };
+}
 
 /**
  * @param {ApiErrorCode} code
@@ -282,8 +300,9 @@ export function createSseResponse(res, { keepAliveIntervalMs = SSE_KEEPALIVE_INT
 
   return {
     /** @param {ChatSseEvent['event'] | ProxySseEvent['event'] | string} event */
-    send(event, data) {
+    send(event, data, id = null) {
       if (!canWrite()) return false;
+      if (id !== null && id !== undefined) res.write(`id: ${id}\n`);
       res.write(`event: ${event}\n`);
       res.write(`data: ${JSON.stringify(data)}\n\n`);
       return true;
@@ -325,13 +344,48 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
   app.get('/api/projects', (_req, res) => {
     try {
+      const latestRunStatuses = listLatestProjectRunStatuses(db);
+      const awaitingInputProjects = listProjectsAwaitingInput(db);
+      const activeRunStatuses = new Map();
+      for (const run of design.runs.list()) {
+        if (!run.projectId) continue;
+        const runStatus = projectStatusFromRun(run);
+        if (design.runs.isTerminal(run.status)) {
+          const existing = latestRunStatuses.get(run.projectId);
+          if (!existing || run.updatedAt > (existing.updatedAt ?? 0)) {
+            latestRunStatuses.set(run.projectId, runStatus);
+          }
+        } else {
+          const existing = activeRunStatuses.get(run.projectId);
+          if (!existing || run.updatedAt > (existing.updatedAt ?? 0)) {
+            activeRunStatuses.set(run.projectId, runStatus);
+          }
+        }
+      }
       /** @type {import('@open-design/contracts').ProjectsResponse} */
-      const body = { projects: listProjects(db) };
+      const body = {
+        projects: listProjects(db).map((project) => ({
+          ...project,
+          status: composeProjectDisplayStatus(
+            activeRunStatuses.get(project.id) ?? latestRunStatuses.get(project.id) ?? { value: 'not_started' },
+            awaitingInputProjects,
+            project.id,
+          ),
+        })),
+      };
       res.json(body);
     } catch (err) {
       sendApiError(res, 500, 'INTERNAL_ERROR', String(err));
     }
   });
+
+  function projectStatusFromRun(run) {
+    return {
+      value: normalizeProjectDisplayStatus(run.status),
+      updatedAt: run.updatedAt,
+      runId: run.id,
+    };
+  }
 
   app.post('/api/projects', async (req, res) => {
     try {
@@ -1013,25 +1067,82 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     },
   );
 
-  app.post('/api/chat', async (req, res) => {
+  const design = {
+    runs: createChatRunService({ createSseResponse, createSseErrorPayload }),
+  };
+
+  const composeDaemonSystemPrompt = async ({ projectId, skillId, designSystemId }) => {
+    const project = typeof projectId === 'string' && projectId ? getProject(db, projectId) : null;
+    const effectiveSkillId = typeof skillId === 'string' && skillId ? skillId : project?.skillId;
+    const effectiveDesignSystemId = typeof designSystemId === 'string' && designSystemId ? designSystemId : project?.designSystemId;
+    const metadata = project?.metadata;
+
+    let skillBody;
+    let skillName;
+    let skillMode;
+    if (effectiveSkillId) {
+      const skill = (await listSkills(SKILLS_DIR)).find((s) => s.id === effectiveSkillId);
+      if (skill) {
+        skillBody = skill.body;
+        skillName = skill.name;
+        skillMode = skill.mode;
+      }
+    }
+
+    let designSystemBody;
+    let designSystemTitle;
+    if (effectiveDesignSystemId) {
+      const systems = await listDesignSystems(DESIGN_SYSTEMS_DIR);
+      const summary = systems.find((s) => s.id === effectiveDesignSystemId);
+      designSystemTitle = summary?.title;
+      designSystemBody = await readDesignSystem(DESIGN_SYSTEMS_DIR, effectiveDesignSystemId) ?? undefined;
+    }
+
+    const template = metadata?.kind === 'template' && typeof metadata.templateId === 'string'
+      ? getTemplate(db, metadata.templateId) ?? undefined
+      : undefined;
+
+    return composeSystemPrompt({
+      skillBody,
+      skillName,
+      skillMode,
+      designSystemBody,
+      designSystemTitle,
+      metadata,
+      template,
+    });
+  };
+
+  const startChatRun = async (chatBody, run) => {
     /** @type {Partial<ChatRequest> & { imagePaths?: string[] }} */
-    const chatBody = req.body || {};
+    chatBody = chatBody || {};
     const {
       agentId,
       message,
       systemPrompt,
       imagePaths = [],
       projectId,
+      conversationId,
+      assistantMessageId,
+      clientRequestId,
+      skillId,
+      designSystemId,
       attachments = [],
       model,
       reasoning,
     } = chatBody;
+    if (typeof projectId === 'string' && projectId) run.projectId = projectId;
+    if (typeof conversationId === 'string' && conversationId) run.conversationId = conversationId;
+    if (typeof assistantMessageId === 'string' && assistantMessageId) run.assistantMessageId = assistantMessageId;
+    if (typeof clientRequestId === 'string' && clientRequestId) run.clientRequestId = clientRequestId;
+    if (typeof agentId === 'string' && agentId) run.agentId = agentId;
     const def = getAgentDef(agentId);
-    if (!def) return sendApiError(res, 400, 'AGENT_UNAVAILABLE', `unknown agent: ${agentId}`);
-    if (!def.bin) return sendApiError(res, 400, 'AGENT_UNAVAILABLE', 'agent has no binary');
+    if (!def) return design.runs.fail(run, 'AGENT_UNAVAILABLE', `unknown agent: ${agentId}`);
+    if (!def.bin) return design.runs.fail(run, 'AGENT_UNAVAILABLE', 'agent has no binary');
     if (typeof message !== 'string' || !message.trim()) {
-      return sendApiError(res, 400, 'BAD_REQUEST', 'message required');
+      return design.runs.fail(run, 'BAD_REQUEST', 'message required');
     }
+    if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
     // Resolve the project working directory (creating the folder if it
     // doesn't exist yet). Without one we don't pass cwd to spawn — the
@@ -1047,6 +1158,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
         cwd = null;
       }
     }
+    if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
     // Sanitise supplied image paths: must live under UPLOAD_DIR.
     const safeImages = imagePaths.filter((p) => {
@@ -1094,9 +1206,14 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     const attachmentHint = safeAttachments.length
       ? `\n\nAttached project files: ${safeAttachments.map((p) => `\`${p}\``).join(', ')}`
       : '';
+    const daemonSystemPrompt = await composeDaemonSystemPrompt({ projectId, skillId, designSystemId });
+    const instructionPrompt = [daemonSystemPrompt, systemPrompt]
+      .map((part) => (typeof part === 'string' ? part.trim() : ''))
+      .filter(Boolean)
+      .join('\n\n---\n\n');
     const composed = [
-      systemPrompt && systemPrompt.trim()
-        ? `# Instructions (read first)\n\n${systemPrompt.trim()}${cwdHint}\n\n---\n`
+      instructionPrompt
+        ? `# Instructions (read first)\n\n${instructionPrompt}${cwdHint}\n\n---\n`
         : cwdHint
           ? `# Instructions${cwdHint}\n\n---\n`
           : '',
@@ -1180,10 +1297,9 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       }
     }
 
+    run.promptFileCleaned = cleanPromptFile;
     const args = def.buildArgs(effectivePrompt, safeImages, extraAllowedDirs, agentOptions, { cwd });
-
-    const sse = createSseResponse(res);
-    const send = sse.send;
+    const send = (event, data) => design.runs.emit(run, event, data);
 
     // resolvedBin was already looked up above for the ENAMETOOLONG check.
     // If detection can't find the binary, surface a friendly SSE error
@@ -1192,13 +1308,13 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     // from issue #10 the rest of this block is meant to prevent.
     if (!resolvedBin) {
       cleanPromptFile();
-      send('error', createSseErrorPayload(
+      design.runs.emit(run, 'error', createSseErrorPayload(
         'AGENT_UNAVAILABLE',
         `Agent "${def.name}" (\`${def.bin}\`) is not installed or not on PATH. ` +
           'Install it and refresh the agent list (GET /api/agents) before retrying.',
         { retryable: true },
       ));
-      return sse.end();
+      return design.runs.finish(run, 'failed', 1, null);
     }
     // npm shims on Windows are .cmd/.bat files; Node ≥21 refuses to spawn
     // those without `shell: true` (CVE-2024-27980). When `shell: true` is set
@@ -1227,7 +1343,12 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     const useShell =
       process.platform === 'win32' && CMD_BAT_RE.test(resolvedBin);
 
+    if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
+
+    run.status = 'running';
+    run.updatedAt = Date.now();
     send('start', {
+      runId: run.id,
       agentId,
       bin: resolvedBin,
       streamFormat: def.streamFormat ?? 'plain',
@@ -1251,6 +1372,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
         cwd: cwd || undefined,
         shell: useShell,
       });
+      run.child = child;
       if ((def.promptViaStdin || needsFilePrompt) && child.stdin && def.streamFormat !== 'pi-rpc') {
         // EPIPE from a fast-exiting CLI (bad auth, missing model, exit on
         // launch) would otherwise surface as an unhandled stream error and
@@ -1265,8 +1387,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       }
     } catch (err) {
       cleanPromptFile();
-      send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', `spawn failed: ${err.message}`));
-      return sse.end();
+      design.runs.emit(run, 'error', createSseErrorPayload('AGENT_EXECUTION_FAILED', `spawn failed: ${err.message}`));
+      return design.runs.finish(run, 'failed', 1, null);
     }
 
     child.stdout.setEncoding('utf8');
@@ -1311,25 +1433,64 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     }
     child.stderr.on('data', (chunk) => send('stderr', { chunk }));
 
-    const kill = () => {
-      if (child && !child.killed) child.kill('SIGTERM');
-    };
-    res.on('close', () => {
-      if (!res.writableEnded) kill();
-    });
-
     child.on('error', (err) => {
       send('error', createSseErrorPayload('AGENT_EXECUTION_FAILED', err.message));
-      sse.end();
+      design.runs.finish(run, 'failed', 1, null);
     });
     child.on('close', (code, signal) => {
       if (acpSession?.hasFatalError()) {
-        return sse.end();
+        return design.runs.finish(run, 'failed', code ?? 1, signal ?? null);
       }
-      cleanPromptFile();
-      send('end', { code, signal });
-      sse.end();
+      const status = run.cancelRequested
+        ? 'canceled'
+        : code === 0
+          ? 'succeeded'
+          : 'failed';
+      design.runs.finish(run, status, code, signal);
     });
+  };
+
+  app.post('/api/runs', (req, res) => {
+    const run = design.runs.create(req.body || {});
+    /** @type {import('@open-design/contracts').ChatRunCreateResponse} */
+    const body = { runId: run.id };
+    res.status(202).json(body);
+    design.runs.start(run, () => startChatRun(req.body || {}, run));
+  });
+
+  app.get('/api/runs', (req, res) => {
+    const { projectId, conversationId, status } = req.query;
+    const runs = design.runs.list({ projectId, conversationId, status });
+    /** @type {import('@open-design/contracts').ChatRunListResponse} */
+    const body = { runs: runs.map(design.runs.statusBody) };
+    res.json(body);
+  });
+
+  app.get('/api/runs/:id', (req, res) => {
+    const run = design.runs.get(req.params.id);
+    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    res.json(design.runs.statusBody(run));
+  });
+
+  app.get('/api/runs/:id/events', (req, res) => {
+    const run = design.runs.get(req.params.id);
+    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    design.runs.stream(run, req, res);
+  });
+
+  app.post('/api/runs/:id/cancel', (req, res) => {
+    const run = design.runs.get(req.params.id);
+    if (!run) return sendApiError(res, 404, 'NOT_FOUND', 'run not found');
+    design.runs.cancel(run);
+    /** @type {import('@open-design/contracts').ChatRunCancelResponse} */
+    const body = { ok: true };
+    res.json(body);
+  });
+
+  app.post('/api/chat', (req, res) => {
+    const run = design.runs.create();
+    design.runs.stream(run, req, res);
+    design.runs.start(run, () => startChatRun(req.body || {}, run));
   });
 
   // ---- API Proxy (SSE) for OpenAI-compatible endpoints ---------------------

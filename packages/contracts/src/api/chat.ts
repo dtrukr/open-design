@@ -7,9 +7,48 @@ export interface ChatRequest {
   message: string;
   systemPrompt?: string;
   projectId?: string | null;
+  conversationId?: string | null;
+  assistantMessageId?: string | null;
+  clientRequestId?: string | null;
+  skillId?: string | null;
+  designSystemId?: string | null;
   attachments?: string[];
   model?: string | null;
   reasoning?: string | null;
+}
+
+export interface ChatRunCreateRequest extends ChatRequest {
+  projectId: string;
+  conversationId: string;
+  assistantMessageId: string;
+  clientRequestId: string;
+}
+
+export type ChatRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';
+
+export interface ChatRunCreateResponse {
+  runId: string;
+}
+
+export interface ChatRunStatusResponse {
+  id: string;
+  projectId: string | null;
+  conversationId: string | null;
+  assistantMessageId: string | null;
+  agentId: string | null;
+  status: ChatRunStatus;
+  createdAt: number;
+  updatedAt: number;
+  exitCode?: number | null;
+  signal?: string | null;
+}
+
+export interface ChatRunListResponse {
+  runs: ChatRunStatusResponse[];
+}
+
+export interface ChatRunCancelResponse {
+  ok: true;
 }
 
 export interface ChatAttachment {
@@ -35,6 +74,9 @@ export interface ChatMessage {
   agentId?: string;
   agentName?: string;
   events?: PersistedAgentEvent[];
+  runId?: string;
+  runStatus?: ChatRunStatus;
+  lastRunEventId?: string;
   startedAt?: number;
   endedAt?: number;
   attachments?: ChatAttachment[];

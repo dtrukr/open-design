@@ -10,3 +10,4 @@ export * from './api/registry';
 export * from './sse/common';
 export * from './sse/chat';
 export * from './sse/proxy';
+export * from './prompts/system';
