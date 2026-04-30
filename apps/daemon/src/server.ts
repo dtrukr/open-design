@@ -81,9 +81,42 @@ export function resolveProjectRoot(moduleDir: string): string {
 const PROJECT_ROOT = resolveProjectRoot(__dirname);
 const RESOURCE_ROOT_ENV = 'OD_RESOURCE_ROOT';
 
-function resolveDaemonResourceRoot() {
-  const configured = process.env[RESOURCE_ROOT_ENV];
-  return configured && configured.length > 0 ? path.resolve(configured) : null;
+function isPathWithin(base, target) {
+  const relativePath = path.relative(path.resolve(base), path.resolve(target));
+  return relativePath === '' || (relativePath.length > 0 && !relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function resolveProcessResourcesPath() {
+  if (typeof process.resourcesPath === 'string' && process.resourcesPath.length > 0) {
+    return process.resourcesPath;
+  }
+
+  // Packaged daemon sidecars run under the bundled Node binary rather than the
+  // Electron root process, so `process.resourcesPath` is unavailable there.
+  // Infer the macOS app Resources directory from that bundled Node path.
+  const resourcesMarker = `${path.sep}Contents${path.sep}Resources${path.sep}`;
+  const markerIndex = process.execPath.indexOf(resourcesMarker);
+  if (markerIndex === -1) return null;
+
+  return process.execPath.slice(0, markerIndex + resourcesMarker.length - 1);
+}
+
+export function resolveDaemonResourceRoot({
+  configured = process.env[RESOURCE_ROOT_ENV],
+  safeBases = [PROJECT_ROOT, resolveProcessResourcesPath()],
+} = {}) {
+  if (!configured || configured.length === 0) return null;
+
+  const resolved = path.resolve(configured);
+  const normalizedSafeBases = safeBases
+    .filter((base) => typeof base === 'string' && base.length > 0)
+    .map((base) => path.resolve(base));
+
+  if (!normalizedSafeBases.some((base) => isPathWithin(base, resolved))) {
+    throw new Error(`${RESOURCE_ROOT_ENV} must be under the workspace root or app resources path`);
+  }
+
+  return resolved;
 }
 
 function resolveDaemonResourceDir(resourceRoot, segment, fallback) {

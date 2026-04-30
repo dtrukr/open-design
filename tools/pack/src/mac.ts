@@ -930,6 +930,9 @@ export async function stopPackedMacApp(config: ToolPackConfig): Promise<MacStopR
   const remainingAfterGraceful = gracefulRequested ? await waitForNoManagedDesktopProcesses(config) : before;
   if (remainingAfterGraceful.pids.length === 0) {
     const unmanaged = !gracefulRequested && before.pids.length === 0 && isUnmanagedDesktopFallback(before.fallback);
+    if (!unmanaged) {
+      await rm(desktopIdentityPath(config), { force: true }).catch(() => undefined);
+    }
     return {
       ...(before.fallback == null ? {} : { fallback: before.fallback }),
       gracefulRequested,
@@ -941,6 +944,9 @@ export async function stopPackedMacApp(config: ToolPackConfig): Promise<MacStopR
   }
 
   const stopped = await stopProcesses(remainingAfterGraceful.pids);
+  if (stopped.remainingPids.length === 0) {
+    await rm(desktopIdentityPath(config), { force: true }).catch(() => undefined);
+  }
   return {
     ...(remainingAfterGraceful.fallback == null ? {} : { fallback: remainingAfterGraceful.fallback }),
     gracefulRequested,

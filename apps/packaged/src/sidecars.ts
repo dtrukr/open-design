@@ -27,6 +27,7 @@ import { createProcessStampArgs, stopProcesses, waitForProcessExit } from "@open
 import type { PackagedNamespacePaths } from "./paths.js";
 
 const require = createRequire(import.meta.url);
+const PACKAGED_CHILD_ENV_ALLOWLIST = ["HOME", "LANG", "LC_ALL", "LOGNAME", "TMPDIR", "USER"] as const;
 
 export type PackagedSidecarHandle = {
   close(): Promise<void>;
@@ -111,6 +112,15 @@ function resolvePackagedPathEnv(basePath = process.env.PATH ?? ""): string {
   return [...new Set(candidates.filter((entry) => entry.length > 0))].join(delimiter);
 }
 
+function resolvePackagedChildBaseEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const baseEnv: NodeJS.ProcessEnv = {};
+  for (const key of PACKAGED_CHILD_ENV_ALLOWLIST) {
+    const value = env[key];
+    if (value != null && value.length > 0) baseEnv[key] = value;
+  }
+  return baseEnv;
+}
+
 function createPackagedDaemonManagedPathEnv(
   paths: PackagedNamespacePaths,
 ): PackagedDaemonManagedPathEnv {
@@ -145,7 +155,7 @@ async function spawnSidecarChild(options: {
     base: options.paths.runtimeRoot,
     contract: OPEN_DESIGN_SIDECAR_CONTRACT,
     extraEnv: {
-      ...process.env,
+      ...resolvePackagedChildBaseEnv(),
       ...options.env,
       NODE_ENV: "production",
       PATH: resolvePackagedPathEnv(),

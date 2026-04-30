@@ -32,6 +32,15 @@ Finder/manual launches cannot carry argv stamps on the root desktop process. To 
 `tools-pack mac stop` trusts that marker only when namespace/stamp/PID/command validation passes; otherwise it reports the
 unmanaged/not-owned reason instead of killing unknown processes.
 
+### `tools-pack mac stop` validation
+
+- If the marker is absent, stop reports `not-running`.
+- If the marker PID is gone, stop reports `not-running` and clears the stale marker.
+- If the marker PID was reused by an unrelated process, stop reports `unmanaged`.
+- If the marker namespace, stamp, runtime root, or command does not match the current namespace, stop reports `unmanaged`.
+
+This keeps `stop` from killing processes outside the current namespace.
+
 Packaged desktop also writes main-process lifecycle logs to `logs/desktop/latest.log` so Finder/manual launches are
 diagnosable. This log is intentionally scoped to packaged desktop startup/shutdown/process errors and does not capture
 web/renderer console output.

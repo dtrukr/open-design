@@ -132,8 +132,14 @@ async function readPackagedVersion(): Promise<string> {
 }
 
 async function fetchReleases(repository: string): Promise<GitHubRelease[]> {
-  const { stdout } = await execFile("gh", ["api", `repos/${repository}/releases?per_page=100`]);
-  return JSON.parse(stdout) as GitHubRelease[];
+  const releases: GitHubRelease[] = [];
+  for (let page = 1; ; page += 1) {
+    const { stdout } = await execFile("gh", ["api", `repos/${repository}/releases?per_page=100&page=${page}`]);
+    const batch = JSON.parse(stdout) as GitHubRelease[];
+    if (batch.length === 0) break;
+    releases.push(...batch);
+  }
+  return releases;
 }
 
 async function fetchReleaseAssetText(repository: string, assetId: number): Promise<string> {

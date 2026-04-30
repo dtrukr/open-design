@@ -77,18 +77,40 @@ function resolveDaemonOrigin(): string | null {
   return port === 0 ? null : `http://${HOST}:${port}`;
 }
 
-function shouldProxyToDaemon(requestUrl: string | undefined): boolean {
-  if (requestUrl == null) return false;
-  const pathname = new URL(requestUrl, `http://${HOST}`).pathname;
-  return pathname === "/api" || pathname.startsWith("/api/") || pathname === "/artifacts" || pathname.startsWith("/artifacts/") || pathname === "/frames" || pathname.startsWith("/frames/");
+function isDaemonProxyPathname(pathname: string): boolean {
+  return (
+    pathname === "/api" ||
+    pathname.startsWith("/api/") ||
+    pathname === "/artifacts" ||
+    pathname.startsWith("/artifacts/") ||
+    pathname === "/frames" ||
+    pathname.startsWith("/frames/")
+  );
+}
+
+export function resolveDaemonProxyTarget(
+  daemonOrigin: string,
+  requestUrl: string | undefined,
+): URL | null {
+  if (requestUrl == null) return null;
+
+  let parsedRequestUrl: URL;
+  try {
+    parsedRequestUrl = new URL(requestUrl, `http://${HOST}`);
+  } catch {
+    return null;
+  }
+
+  if (!isDaemonProxyPathname(parsedRequestUrl.pathname)) return null;
+
+  return new URL(`${parsedRequestUrl.pathname}${parsedRequestUrl.search}`, daemonOrigin);
 }
 
 async function proxyToDaemon(
-  daemonOrigin: string,
+  target: URL,
   request: IncomingMessage,
   response: ServerResponse,
 ): Promise<void> {
-  const target = new URL(request.url ?? "/", daemonOrigin);
   const proxyRequestFactory = target.protocol === "https:" ? createHttpsRequest : createHttpRequest;
   const headers = { ...request.headers, host: target.host };
 
@@ -182,8 +204,9 @@ export async function startWebSidecar(runtime: SidecarRuntimeContext<SidecarStam
   const daemonOrigin = resolveDaemonOrigin();
   const handleRequest = app.getRequestHandler();
   const httpServer = createHttpServer((request, response) => {
-    if (daemonOrigin != null && shouldProxyToDaemon(request.url)) {
-      void proxyToDaemon(daemonOrigin, request, response).catch((error: unknown) => {
+    const daemonProxyTarget = daemonOrigin == null ? null : resolveDaemonProxyTarget(daemonOrigin, request.url);
+    if (daemonProxyTarget != null) {
+      void proxyToDaemon(daemonProxyTarget, request, response).catch((error: unknown) => {
         response.statusCode = 502;
         response.end(error instanceof Error ? error.message : String(error));
       });
