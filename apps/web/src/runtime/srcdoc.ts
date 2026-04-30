@@ -188,7 +188,13 @@ function injectDeckBridge(doc: string): string {
     return 'active';
   }
   function canSetActive(list){
-    return findActiveByClass(list) >= 0 || findActiveByVisibility(list) >= 0;
+    if (findActiveByClass(list) >= 0) return true;
+    for (var i=0; i<list.length; i++) {
+      if (list[i].style.display === 'none') return true;
+      if (list[i].style.visibility === 'hidden') return true;
+      if (list[i].hasAttribute('hidden')) return true;
+    }
+    return false;
   }
   function updateDeckChrome(i, count){
     var cur = document.getElementById('deck-cur');
