@@ -83,17 +83,53 @@ export function buildReactComponentSrcdoc(
 }
 
 export function prepareReactComponentSource(source: string): string {
-  const withoutImports = stripImportDeclarations(source);
+  const withoutImports = transformImportDeclarations(source);
   const transformed = transformExports(withoutImports);
   return `${transformed.code}
 window.__OpenDesignComponent = window.__OpenDesignComponent || (${componentFallbackExpression(transformed.defaultName)});`;
 }
 
-function stripImportDeclarations(source: string): string {
+function transformImportDeclarations(source: string): string {
   return source
     .replace(/^\s*import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"];?\s*$/gm, '')
+    .replace(
+      /^\s*import\s+([\s\S]*?)\s+from\s+['"]react['"];?\s*$/gm,
+      (_match, specifier: string) => reactImportReplacement(specifier),
+    )
     .replace(/^\s*import\s+[\s\S]*?\s+from\s+['"][^'"]+['"];?\s*$/gm, '')
     .replace(/^\s*import\s+['"][^'"]+['"];?\s*$/gm, '');
+}
+
+function reactImportReplacement(specifier: string): string {
+  const bindings: string[] = [];
+  const trimmed = specifier.trim();
+  const namespaceMatch = trimmed.match(/^\*\s+as\s+([A-Za-z_$][\w$]*)$/);
+  const namespaceName = namespaceMatch?.[1];
+  if (namespaceName) {
+    bindings.push(`const ${namespaceName} = window.React;`);
+    return bindings.join('\n');
+  }
+
+  const namedMatch = trimmed.match(/\{([\s\S]*)\}/);
+  const namedPart = namedMatch?.[1]?.trim() ?? '';
+  const defaultPart = trimmed
+    .replace(/\{[\s\S]*\}/, '')
+    .replace(/,\s*$/, '')
+    .trim();
+
+  if (defaultPart) bindings.push(`const ${defaultPart} = window.React;`);
+  if (namedPart) {
+    const namedBindings = namedPart
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .filter((part) => !part.startsWith('type '))
+      .map((part) => part.replace(/\s+as\s+/g, ': '))
+      .join(', ');
+    if (namedBindings) bindings.push(`const { ${namedBindings} } = window.React;`);
+  }
+
+  return bindings.join('\n');
 }
 
 function transformExports(source: string): { code: string; defaultName: string | null } {
@@ -147,6 +183,21 @@ function transformExports(source: string): { code: string; defaultName: string |
       return `class ${name}`;
     },
   );
+  code = code.replace(/export\s*\{([^}]*)\};?/g, (_match, specifiers: string) => {
+    for (const rawSpecifier of specifiers.split(',')) {
+      const specifier = rawSpecifier.trim();
+      const defaultMatch = specifier.match(/^([A-Za-z_$][\w$]*)\s+as\s+default$/);
+      const reexportedDefaultName = defaultMatch?.[1];
+      if (reexportedDefaultName) {
+        defaultName = reexportedDefaultName;
+        continue;
+      }
+      const namedMatch = specifier.match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+[A-Za-z_$][\w$]*)?$/);
+      const exportedName = namedMatch?.[1];
+      if (exportedName) firstNamedExport ||= exportedName;
+    }
+    return '';
+  });
   code = code.replace(/export\s*\{[^}]*\};?/g, '');
 
   return { code, defaultName: defaultName || firstNamedExport };

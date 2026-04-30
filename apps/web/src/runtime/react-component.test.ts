@@ -21,6 +21,29 @@ export default function Card() {
     expect(out).toContain('const Preview =');
     expect(out).toContain("typeof Preview !== 'undefined' ? Preview : null");
   });
+
+  it('preserves React hook imports as runtime bindings', () => {
+    const out = prepareReactComponentSource(`
+import { useState, useEffect as useReactEffect } from 'react';
+export default function Counter() {
+  const [count, setCount] = useState(0);
+  useReactEffect(() => setCount(1), []);
+  return <button>{count}</button>;
+}
+`);
+    expect(out).not.toContain("import { useState");
+    expect(out).toContain('const { useState, useEffect: useReactEffect } = window.React;');
+    expect(out).toContain('function Counter()');
+  });
+
+  it('detects default re-exports before removing export specifiers', () => {
+    const out = prepareReactComponentSource(`
+const Foo = () => <main />;
+export { Foo as default };
+`);
+    expect(out).not.toContain('export { Foo as default }');
+    expect(out).toContain("typeof Foo !== 'undefined' ? Foo : null");
+  });
 });
 
 describe('buildReactComponentSrcdoc', () => {

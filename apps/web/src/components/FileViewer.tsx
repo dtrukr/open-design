@@ -154,6 +154,7 @@ function ReactComponentViewer({
   }, [shareMenuOpen]);
 
   const exportTitle = file.name.replace(/\.(jsx|tsx)$/i, '') || file.name;
+  const sourceExtension = file.name.toLowerCase().endsWith('.tsx') ? '.tsx' : '.jsx';
   const srcDoc = useMemo(
     () => (source === null ? '' : buildReactComponentSrcdoc(source, { title: exportTitle })),
     [source, exportTitle],
@@ -215,7 +216,7 @@ function ReactComponentViewer({
                       role="menuitem"
                       onClick={() => {
                         setShareMenuOpen(false);
-                        exportAsJsx(source, exportTitle);
+                        exportAsJsx(source, exportTitle, sourceExtension);
                       }}
                     >
                       <span className="share-menu-icon"><Icon name="file-code" size={14} /></span>
@@ -240,7 +241,7 @@ function ReactComponentViewer({
                       role="menuitem"
                       onClick={() => {
                         setShareMenuOpen(false);
-                        exportReactComponentAsZip(source, exportTitle);
+                        exportReactComponentAsZip(source, exportTitle, sourceExtension);
                       }}
                     >
                       <span className="share-menu-icon"><Icon name="download" size={14} /></span>
