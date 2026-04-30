@@ -217,8 +217,11 @@ async function collectSseEvents(res, events, agentId) {
 }
 
 function parseSseEvent(chunk) {
-  const eventLine = chunk.split('\n').find((line) => line.startsWith('event: '));
-  const dataLine = chunk.split('\n').find((line) => line.startsWith('data: '));
+  const lines = chunk.split('\n');
+  if (lines.every((line) => line === '' || line.startsWith(':'))) return null;
+
+  const eventLine = lines.find((line) => line.startsWith('event: '));
+  const dataLine = lines.find((line) => line.startsWith('data: '));
   if (!eventLine || !dataLine) return null;
   return {
     event: eventLine.slice('event: '.length),

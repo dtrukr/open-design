@@ -11,6 +11,7 @@
  */
 import type { AgentEvent, ChatMessage } from '../types';
 import type { StreamHandlers } from './anthropic';
+import { parseSseFrame } from './sse';
 
 export interface DaemonStreamHandlers extends StreamHandlers {
   onAgentEvent: (ev: AgentEvent) => void;
@@ -94,8 +95,8 @@ export async function streamViaDaemon({
       while ((idx = buf.indexOf('\n\n')) !== -1) {
         const frame = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
-        const parsed = parseFrame(frame);
-        if (!parsed) continue;
+        const parsed = parseSseFrame(frame);
+        if (!parsed || parsed.kind !== 'event') continue;
 
         if (parsed.event === 'stdout') {
           const chunk = String(parsed.data.chunk ?? '');
@@ -152,26 +153,6 @@ export async function streamViaDaemon({
   } catch (err) {
     if ((err as Error).name === 'AbortError') return;
     handlers.onError(err instanceof Error ? err : new Error(String(err)));
-  }
-}
-
-interface ParsedFrame {
-  event: string;
-  data: Record<string, unknown>;
-}
-
-function parseFrame(frame: string): ParsedFrame | null {
-  const lines = frame.split('\n');
-  let event = 'message';
-  let data = '';
-  for (const line of lines) {
-    if (line.startsWith('event: ')) event = line.slice(7).trim();
-    else if (line.startsWith('data: ')) data += line.slice(6);
-  }
-  try {
-    return { event, data: JSON.parse(data) };
-  } catch {
-    return null;
   }
 }
 

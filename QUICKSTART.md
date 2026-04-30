@@ -63,6 +63,27 @@ Root scripts are orchestration only. App-specific commands live in workspace pac
 
 For the daemon-only production mode, the daemon serves the static Next.js export itself at `http://localhost:7456`, so no reverse proxy is involved.
 
+If you place nginx in front of the daemon, keep SSE routes unbuffered and uncompressed. A common failure is the browser console showing `net::ERR_INCOMPLETE_CHUNKED_ENCODING 200 (OK)` after 80-90 seconds because nginx `gzip on` buffers chunked SSE responses even when the daemon sends `X-Accel-Buffering: no`.
+
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:7456;
+
+    proxy_buffering off;
+    gzip off;
+
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
 During local development, `apps/web/next.config.ts` rewrites `/api/*`, `/artifacts/*`, and `/frames/*` to the daemon port so the App Router app can talk to the sibling Express process without CORS setup.
 
 ## Two execution modes

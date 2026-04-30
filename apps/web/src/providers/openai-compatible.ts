@@ -7,6 +7,7 @@
  */
 import type { AppConfig, ChatMessage } from '../types';
 import type { StreamHandlers } from './anthropic';
+import { parseSseFrame } from './sse';
 
 export async function streamMessageOpenAI(
   cfg: AppConfig,
@@ -56,22 +57,11 @@ export async function streamMessageOpenAI(
         const frame = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
 
-        let event = 'message';
-        let data = '';
-        for (const line of frame.split('\n')) {
-          if (line.startsWith('event: ')) event = line.slice(7).trim();
-          else if (line.startsWith('data: ')) data += line.slice(6);
-        }
+        const parsed = parseSseFrame(frame);
+        if (!parsed || parsed.kind !== 'event') continue;
 
-        let parsed: Record<string, unknown>;
-        try {
-          parsed = JSON.parse(data);
-        } catch {
-          continue;
-        }
-
-        if (event === 'delta') {
-          const text = String(parsed.text ?? '');
+        if (parsed.event === 'delta') {
+          const text = String(parsed.data.text ?? '');
           if (text) {
             acc += text;
             handlers.onDelta(text);
@@ -79,12 +69,12 @@ export async function streamMessageOpenAI(
           continue;
         }
 
-        if (event === 'error') {
-          handlers.onError(new Error(String(parsed.message ?? 'proxy error')));
+        if (parsed.event === 'error') {
+          handlers.onError(new Error(String(parsed.data.message ?? 'proxy error')));
           return;
         }
 
-        if (event === 'end') {
+        if (parsed.event === 'end') {
           handlers.onDone(acc);
           return;
         }

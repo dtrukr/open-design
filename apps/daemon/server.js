@@ -83,6 +83,7 @@ const promptFileBootstrap = (fp) =>
   'Open that file first and follow every instruction in it exactly — ' +
   'it contains the system prompt, design system, skill workflow, and user request. ' +
   'Do not begin your response until you have read the entire file.';
+export const SSE_KEEPALIVE_INTERVAL_MS = 25_000;
 
 const UPLOAD_DIR = path.join(os.tmpdir(), 'od-uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -175,6 +176,56 @@ function sendMulterError(res, err) {
   }
 
   return res.status(500).json({ code: 'UPLOAD_ERROR', error: 'upload failed' });
+}
+
+export function createSseResponse(res, { keepAliveIntervalMs = SSE_KEEPALIVE_INTERVAL_MS } = {}) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const canWrite = () => !res.destroyed && !res.writableEnded;
+  const writeKeepAlive = () => {
+    if (canWrite()) {
+      res.write(': keepalive\n\n');
+      return true;
+    }
+    return false;
+  };
+
+  let heartbeat = null;
+  if (keepAliveIntervalMs > 0) {
+    heartbeat = setInterval(writeKeepAlive, keepAliveIntervalMs);
+    heartbeat.unref?.();
+  }
+
+  const cleanup = () => {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  };
+
+  res.on('close', cleanup);
+  res.on('finish', cleanup);
+
+  return {
+    send(event, data) {
+      if (!canWrite()) return false;
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+      return true;
+    },
+    writeKeepAlive,
+    cleanup,
+    end() {
+      cleanup();
+      if (canWrite()) {
+        res.end();
+      }
+    },
+  };
 }
 
 export async function startServer({ port = 7456, returnServer = false } = {}) {
@@ -1032,16 +1083,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
     const args = def.buildArgs(effectivePrompt, safeImages, extraAllowedDirs, agentOptions, { cwd });
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders?.();
-
-    const send = (event, data) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
+    const sse = createSseResponse(res);
+    const send = sse.send;
 
     // resolvedBin was already looked up above for the ENAMETOOLONG check.
     // If detection can't find the binary, surface a friendly SSE error
@@ -1055,7 +1098,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
           `Agent "${def.name}" (\`${def.bin}\`) is not installed or not on PATH. ` +
           'Install it and refresh the agent list (GET /api/agents) before retrying.',
       });
-      return res.end();
+      return sse.end();
     }
     // npm shims on Windows are .cmd/.bat files; Node ≥21 refuses to spawn
     // those without `shell: true` (CVE-2024-27980). When `shell: true` is set
@@ -1123,7 +1166,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     } catch (err) {
       cleanPromptFile();
       send('error', { message: `spawn failed: ${err.message}` });
-      return res.end();
+      return sse.end();
     }
 
     child.stdout.setEncoding('utf8');
@@ -1169,15 +1212,15 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
     child.on('error', (err) => {
       send('error', { message: err.message });
-      res.end();
+      sse.end();
     });
     child.on('close', (code, signal) => {
       if (acpSession?.hasFatalError()) {
-        return res.end();
+        return sse.end();
       }
       cleanPromptFile();
       send('end', { code, signal });
-      res.end();
+      sse.end();
     });
   });
 
@@ -1238,16 +1281,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     };
     const body = JSON.stringify(payload);
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache, no-transform');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
-    res.flushHeaders?.();
-
-    const send = (event, data) => {
-      res.write(`event: ${event}\n`);
-      res.write(`data: ${JSON.stringify(data)}\n\n`);
-    };
+    const sse = createSseResponse(res);
+    const send = sse.send;
 
     let upstream;
     try {
@@ -1261,7 +1296,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       });
     } catch (fetchErr) {
       send('error', { message: `fetch failed: ${fetchErr.message}` });
-      return res.end();
+      return sse.end();
     }
 
     if (!upstream.ok) {
@@ -1269,7 +1304,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       const safeErr = errText.slice(0, 500).replace(/Bearer [A-Za-z0-9_\-\.]+/g, 'Bearer [REDACTED]');
       console.error(`[proxy] upstream ${upstream.status}: ${safeErr.slice(0, 200)}`);
       send('error', { message: `upstream ${upstream.status}: ${safeErr}` });
-      return res.end();
+      return sse.end();
     }
 
     send('start', { model });
@@ -1291,7 +1326,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
         const payload = line.slice(6).trim();
         if (payload === '[DONE]') {
           send('end', {});
-          return res.end();
+          return sse.end();
         }
         try {
           const chunk = JSON.parse(payload);
@@ -1318,7 +1353,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     }
 
     send('end', {});
-    res.end();
+    sse.end();
   });
 
   // SPA fallback for the built web app. Put this LAST so it never shadows
