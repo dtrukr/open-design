@@ -351,8 +351,8 @@ async function writeAssembledApp(
     `${JSON.stringify(
       {
         namespace: config.namespace,
-        namespaceBaseRoot: config.roots.runtime.namespaceBaseRoot,
         nodeCommandRelative: "open-design/bin/node",
+        ...(config.portable ? {} : { namespaceBaseRoot: config.roots.runtime.namespaceBaseRoot }),
       },
       null,
       2,

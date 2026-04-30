@@ -7,6 +7,7 @@ The active slice is mac-first local packaging and smoke lifecycle control:
 - `tools-pack mac build --to all`
 - `tools-pack mac build --to app|dmg|zip`
 - `tools-pack mac build --to all --signed`
+- `tools-pack mac build --to all --portable` for release artifacts that must not bake local tools-pack runtime paths
 - `tools-pack mac install`
 - `tools-pack mac start`
 - `tools-pack mac stop`
@@ -44,6 +45,10 @@ The current release slice is mac beta publication. Runtime updater integration a
 
 Electron-builder resources live under `tools/pack/resources/mac/`. The current logo is staged there as the mac icon/DMG
 placeholder so future design-provided assets can replace the resource files without changing packaging code.
+
+Local developer artifacts bake the tools-pack namespace runtime root so `tools-pack mac start/stop/logs/cleanup` can manage
+them from the repo. Release artifacts use `--portable` so the installed app resolves namespace data/log/runtime/user-data
+from the user's Electron `userData` root instead of the build machine's `.tmp` path.
 
 `--to dmg` is manual-install DMG output only. Any builder-generated updater metadata such as `latest-mac.yml` or
 `.blockmap` files is treated as scratch and cleaned from the builder directory; release-beta generates the authoritative

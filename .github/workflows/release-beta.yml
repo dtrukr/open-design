@@ -107,6 +107,7 @@ jobs:
           pnpm exec tools-pack mac build \
             --dir "$RUNNER_TEMP/tools-pack" \
             --namespace release-beta \
+            --portable \
             --to all \
             --json \
             $signed_flag

@@ -21,6 +21,7 @@ export type ToolPackCliOptions = {
   dir?: string;
   json?: boolean;
   namespace?: string;
+  portable?: boolean;
   signed?: boolean;
   to?: string;
 };
@@ -45,6 +46,7 @@ export type ToolPackConfig = {
   electronVersion: string;
   namespace: string;
   platform: ToolPackPlatform;
+  portable: boolean;
   roots: ToolPackRoots;
   signed: boolean;
   to: ToolPackBuildOutput;
@@ -101,6 +103,7 @@ export function resolveToolPackConfig(
     electronVersion: resolveElectronVersion(WORKSPACE_ROOT),
     namespace,
     platform,
+    portable: options.portable === true,
     roots: {
       output: {
         appBuilderRoot: join(outputNamespaceRoot, "builder"),

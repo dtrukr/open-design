@@ -41,6 +41,7 @@ function addSharedOptions(command: CacCommand) {
 
 function addBuildOptions(command: CacCommand) {
   return command
+    .option("--portable", "do not bake local tools-pack runtime roots into the packaged config")
     .option("--signed", "build a signed/notarized mac artifact")
     .option("--to <target>", "build target: all|app|dmg|zip (default: all)");
 }
