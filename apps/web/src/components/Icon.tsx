@@ -6,6 +6,7 @@ type IconName =
   | 'attach'
   | 'check'
   | 'chevron-down'
+  | 'chevron-left'
   | 'chevron-right'
   | 'close'
   | 'copy'
@@ -101,6 +102,12 @@ export function Icon({ name, size = 14, strokeWidth = 1.6, ...rest }: Props) {
       return (
         <svg {...common}>
           <path d="m6 9 6 6 6-6" />
+        </svg>
+      );
+    case 'chevron-left':
+      return (
+        <svg {...common}>
+          <path d="m15 18-6-6 6-6" />
         </svg>
       );
     case 'chevron-right':

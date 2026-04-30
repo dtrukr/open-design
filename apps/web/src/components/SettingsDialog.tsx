@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Dispatch, SetStateAction } from 'react';
 import { LOCALE_LABEL, LOCALES, useI18n } from '../i18n';
 import type { Locale } from '../i18n';
 import { AgentIcon } from './AgentIcon';
@@ -10,6 +11,8 @@ import {
 } from './modelOptions';
 import { KNOWN_PROVIDERS } from '../state/config';
 import type { AgentInfo, AppConfig, ExecMode } from '../types';
+import { MEDIA_PROVIDERS } from '../media/models';
+import type { MediaProvider } from '../media/models';
 
 interface Props {
   initial: AppConfig;
@@ -395,6 +398,8 @@ export function SettingsDialog({
             </section>
           )}
 
+          <MediaProvidersSection cfg={cfg} setCfg={setCfg} />
+
           <section className="settings-section">
             <div className="section-head">
               <div>
@@ -478,5 +483,86 @@ export function SettingsDialog({
         </footer>
       </div>
     </div>
+  );
+}
+
+function MediaProvidersSection({
+  cfg,
+  setCfg,
+}: {
+  cfg: AppConfig;
+  setCfg: Dispatch<SetStateAction<AppConfig>>;
+}) {
+  const { t } = useI18n();
+  const providers = MEDIA_PROVIDERS.filter((p) => p.settingsVisible !== false);
+  const updateProvider = (
+    provider: MediaProvider,
+    patch: { apiKey?: string; baseUrl?: string },
+  ) => {
+    setCfg((curr) => {
+      const prev = curr.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '' };
+      const next = { ...prev, ...patch };
+      const map = { ...(curr.mediaProviders ?? {}) };
+      if (!next.apiKey.trim() && !next.baseUrl.trim()) {
+        delete map[provider.id];
+      } else {
+        map[provider.id] = next;
+      }
+      return { ...curr, mediaProviders: map };
+    });
+  };
+
+  return (
+    <section className="settings-section">
+      <div className="section-head">
+        <div>
+          <h3>{t('settings.mediaProviders')}</h3>
+          <p className="hint">{t('settings.mediaProvidersHint')}</p>
+        </div>
+      </div>
+      <div className="media-provider-list">
+        {providers.map((provider) => {
+          const entry = cfg.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '' };
+          const configured = Boolean(entry.apiKey.trim() || entry.baseUrl.trim());
+          return (
+            <div key={provider.id} className={`media-provider-row${provider.integrated ? '' : ' pending'}`}>
+              <div className="media-provider-head">
+                <div className="media-provider-meta">
+                  <span className="media-provider-name">{provider.label}</span>
+                  <span className="media-provider-hint">{provider.hint}</span>
+                </div>
+                <span className={`media-provider-badge ${configured ? 'on' : 'off'}`}>
+                  {configured
+                    ? t('settings.mediaProviderConfigured')
+                    : t('settings.mediaProviderUnset')}
+                </span>
+              </div>
+              <div className="media-provider-body">
+                <input
+                  type="password"
+                  value={entry.apiKey}
+                  placeholder={t('settings.mediaProviderPlaceholder')}
+                  aria-label={`${provider.label} ${t('settings.mediaProviderApiKey')}`}
+                  onChange={(e) => updateProvider(provider, { apiKey: e.target.value })}
+                />
+                <input
+                  value={entry.baseUrl}
+                  placeholder={provider.defaultBaseUrl || t('settings.mediaProviderBaseUrlPlaceholder')}
+                  aria-label={`${provider.label} ${t('settings.mediaProviderBaseUrl')}`}
+                  onChange={(e) => updateProvider(provider, { baseUrl: e.target.value })}
+                />
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => updateProvider(provider, { apiKey: '', baseUrl: '' })}
+                >
+                  {t('settings.mediaProviderClear')}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }

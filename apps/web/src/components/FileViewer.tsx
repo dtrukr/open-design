@@ -66,6 +66,12 @@ export function FileViewer({
   if (file.kind === 'image') {
     return <ImageViewer projectId={projectId} file={file} />;
   }
+  if (file.kind === 'video') {
+    return <VideoViewer projectId={projectId} file={file} />;
+  }
+  if (file.kind === 'audio') {
+    return <AudioViewer projectId={projectId} file={file} />;
+  }
   if (file.kind === 'sketch') {
     return <ImageViewer projectId={projectId} file={file} />;
   }
@@ -1123,6 +1129,62 @@ function ImageViewer({
       </div>
       <div className="viewer-body image-body">
         <img alt={file.name} src={url} />
+      </div>
+    </div>
+  );
+}
+
+function VideoViewer({
+  projectId,
+  file,
+}: {
+  projectId: string;
+  file: ProjectFile;
+}) {
+  const t = useT();
+  const url = `${projectFileUrl(projectId, file.name)}?v=${Math.round(file.mtime)}`;
+  return (
+    <div className="viewer video-viewer">
+      <div className="viewer-toolbar">
+        <div className="viewer-toolbar-left">
+          <span className="viewer-meta">
+            {t('fileViewer.videoMeta', { size: humanSize(file.size) })}
+          </span>
+        </div>
+        <FileActions projectId={projectId} file={file} />
+      </div>
+      <div className="viewer-body video-body">
+        <video src={url} controls playsInline preload="metadata" />
+      </div>
+    </div>
+  );
+}
+
+function AudioViewer({
+  projectId,
+  file,
+}: {
+  projectId: string;
+  file: ProjectFile;
+}) {
+  const t = useT();
+  const url = `${projectFileUrl(projectId, file.name)}?v=${Math.round(file.mtime)}`;
+  return (
+    <div className="viewer audio-viewer">
+      <div className="viewer-toolbar">
+        <div className="viewer-toolbar-left">
+          <span className="viewer-meta">
+            {t('fileViewer.audioMeta', { size: humanSize(file.size) })}
+          </span>
+        </div>
+        <FileActions projectId={projectId} file={file} />
+      </div>
+      <div className="viewer-body audio-body">
+        <div className="audio-card">
+          <Icon name="mic" size={28} />
+          <div className="audio-card-name">{file.name}</div>
+          <audio src={url} controls preload="metadata" />
+        </div>
       </div>
     </div>
   );

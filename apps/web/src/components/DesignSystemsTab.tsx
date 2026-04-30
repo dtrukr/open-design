@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useT } from '../i18n';
-import type { DesignSystemSummary } from '../types';
+import type { DesignSystemSummary, Surface } from '../types';
 
 interface Props {
   systems: DesignSystemSummary[];
@@ -22,23 +22,49 @@ const CATEGORY_ORDER = [
   'Automotive',
 ];
 
+type SurfaceFilter = 'all' | Surface;
+
+const SURFACE_PILLS: { value: SurfaceFilter; labelKey: 'examples.modeAll' | 'ds.surfaceWeb' | 'ds.surfaceImage' | 'ds.surfaceVideo' | 'ds.surfaceAudio' }[] = [
+  { value: 'all', labelKey: 'examples.modeAll' },
+  { value: 'web', labelKey: 'ds.surfaceWeb' },
+  { value: 'image', labelKey: 'ds.surfaceImage' },
+  { value: 'video', labelKey: 'ds.surfaceVideo' },
+  { value: 'audio', labelKey: 'ds.surfaceAudio' },
+];
+
+function surfaceOf(system: DesignSystemSummary): Surface {
+  return system.surface ?? 'web';
+}
+
 export function DesignSystemsTab({ systems, selectedId, onSelect, onPreview }: Props) {
   const t = useT();
   const [filter, setFilter] = useState('');
+  const [surfaceFilter, setSurfaceFilter] = useState<SurfaceFilter>('all');
   const [category, setCategory] = useState<string>('All');
+
+  const surfaceScoped = useMemo(
+    () => surfaceFilter === 'all' ? systems : systems.filter((s) => surfaceOf(s) === surfaceFilter),
+    [systems, surfaceFilter],
+  );
+
+  const surfaceCounts = useMemo(() => {
+    const counts: Record<SurfaceFilter, number> = { all: systems.length, web: 0, image: 0, video: 0, audio: 0 };
+    for (const s of systems) counts[surfaceOf(s)]++;
+    return counts;
+  }, [systems]);
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
-    for (const s of systems) cats.add(s.category || 'Uncategorized');
+    for (const s of surfaceScoped) cats.add(s.category || 'Uncategorized');
     const ordered: string[] = [];
     for (const c of CATEGORY_ORDER) if (cats.has(c)) ordered.push(c);
     for (const c of [...cats].sort()) if (!ordered.includes(c)) ordered.push(c);
     return ['All', ...ordered];
-  }, [systems]);
+  }, [surfaceScoped]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    return systems.filter((s) => {
+    return surfaceScoped.filter((s) => {
       if (category !== 'All' && (s.category || 'Uncategorized') !== category) return false;
       if (!q) return true;
       return (
@@ -46,7 +72,7 @@ export function DesignSystemsTab({ systems, selectedId, onSelect, onPreview }: P
         s.summary.toLowerCase().includes(q)
       );
     });
-  }, [systems, filter, category]);
+  }, [surfaceScoped, filter, category]);
 
   // The category metadata coming from each design system is authored in
   // English. We translate the well-known buckets (All / Uncategorized) but
@@ -73,6 +99,29 @@ export function DesignSystemsTab({ systems, selectedId, onSelect, onPreview }: P
             </option>
           ))}
         </select>
+      </div>
+      <div
+        className="examples-filter-row"
+        role="tablist"
+        aria-label={t('ds.surfaceLabel')}
+      >
+        <span className="examples-filter-label">{t('ds.surfaceLabel')}</span>
+        {SURFACE_PILLS.map((p) => (
+          <button
+            key={p.value}
+            type="button"
+            role="tab"
+            aria-selected={surfaceFilter === p.value}
+            className={`filter-pill ${surfaceFilter === p.value ? 'active' : ''}`}
+            onClick={() => {
+              setSurfaceFilter(p.value);
+              setCategory('All');
+            }}
+          >
+            {t(p.labelKey)}
+            <span className="filter-pill-count">{surfaceCounts[p.value]}</span>
+          </button>
+        ))}
       </div>
       {filtered.length === 0 ? (
         <div className="tab-empty">{t('ds.emptyNoMatch')}</div>

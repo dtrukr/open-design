@@ -261,6 +261,12 @@ const EXT_MIME = {
   '.gif': 'image/gif',
   '.webp': 'image/webp',
   '.avif': 'image/avif',
+  '.mp4': 'video/mp4',
+  '.mov': 'video/quicktime',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
 };
 
 export function mimeFor(name) {
@@ -280,6 +286,8 @@ export function kindFor(name) {
     if (name.startsWith('sketch-')) return 'sketch';
     return 'image';
   }
+  if (['.mp4', '.mov', '.webm'].includes(ext)) return 'video';
+  if (['.mp3', '.wav', '.m4a'].includes(ext)) return 'audio';
   if (['.md', '.txt'].includes(ext)) return 'text';
   if (['.js', '.mjs', '.cjs', '.ts', '.tsx', '.json', '.css'].includes(ext)) {
     return 'code';

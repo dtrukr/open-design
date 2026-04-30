@@ -23,7 +23,15 @@ export interface SkillSummary {
   name: string;
   description: string;
   triggers: string[];
-  mode: 'prototype' | 'deck' | 'template' | 'design-system';
+  mode:
+    | 'prototype'
+    | 'deck'
+    | 'template'
+    | 'design-system'
+    | 'image'
+    | 'video'
+    | 'audio';
+  surface?: 'web' | 'image' | 'video' | 'audio';
   platform?: 'desktop' | 'mobile' | null;
   scenario?: string | null;
   previewType: string;
@@ -56,6 +64,7 @@ export interface DesignSystemSummary {
   category: string;
   summary: string;
   swatches?: string[];
+  surface?: 'web' | 'image' | 'video' | 'audio';
 }
 
 export interface DesignSystemDetail extends DesignSystemSummary {

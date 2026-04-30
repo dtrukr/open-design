@@ -1,4 +1,4 @@
-import type { AppConfig } from '../types';
+import type { AppConfig, MediaProviderCredentials } from '../types';
 
 const STORAGE_KEY = 'open-design:config';
 
@@ -11,6 +11,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   skillId: null,
   designSystemId: null,
   onboardingCompleted: false,
+  mediaProviders: {},
   agentModels: {},
 };
 
@@ -26,7 +27,12 @@ export function loadConfig(): AppConfig {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_CONFIG };
     const parsed = JSON.parse(raw) as Partial<AppConfig>;
-    return { ...DEFAULT_CONFIG, ...parsed };
+    return {
+      ...DEFAULT_CONFIG,
+      ...parsed,
+      mediaProviders: { ...(parsed.mediaProviders ?? {}) },
+      agentModels: { ...(parsed.agentModels ?? {}) },
+    };
   } catch {
     return { ...DEFAULT_CONFIG };
   }
@@ -34,4 +40,29 @@ export function loadConfig(): AppConfig {
 
 export function saveConfig(config: AppConfig): void {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+}
+
+export function hasAnyConfiguredProvider(
+  providers: Record<string, MediaProviderCredentials> | undefined,
+): boolean {
+  if (!providers) return false;
+  return Object.values(providers).some((entry) =>
+    Boolean(entry?.apiKey?.trim() || entry?.baseUrl?.trim()),
+  );
+}
+
+export async function syncMediaProvidersToDaemon(
+  providers: Record<string, MediaProviderCredentials> | undefined,
+  options?: { force?: boolean },
+): Promise<void> {
+  if (!providers) return;
+  try {
+    await fetch('/api/media/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ providers, force: Boolean(options?.force) }),
+    });
+  } catch {
+    // Daemon offline; localStorage keeps the user's copy for the next save.
+  }
 }

@@ -26,12 +26,14 @@ export async function listSkills(skillsRoot) {
       const { data, body } = parseFrontmatter(raw);
       const hasAttachments = await dirHasAttachments(dir);
       const mode = data.od?.mode || inferMode(body, data.description);
+      const surface = normalizeSurface(data.od?.surface, mode);
       out.push({
         id: data.name || entry.name,
         name: data.name || entry.name,
         description: data.description || "",
         triggers: Array.isArray(data.triggers) ? data.triggers : [],
         mode,
+        surface,
         platform: normalizePlatform(
           data.od?.platform,
           mode,
@@ -153,11 +155,24 @@ function derivePrompt(data) {
 
 function inferMode(body, description) {
   const hay = `${description ?? ""}\n${body ?? ""}`.toLowerCase();
+  if (/\bimage|poster|illustration|photography|图片|海报|插画/.test(hay)) return "image";
+  if (/\bvideo|motion|shortform|animation|视频|动效|短片/.test(hay)) return "video";
+  if (/\baudio|music|jingle|tts|sound|音频|音乐|配音|音效/.test(hay)) return "audio";
   if (/\bppt|deck|slide|presentation|幻灯|投影/.test(hay)) return "deck";
   if (/\bdesign[- ]system|\bdesign\.md|\bdesign tokens/.test(hay))
     return "design-system";
   if (/\btemplate\b/.test(hay)) return "template";
   return "prototype";
+}
+
+const KNOWN_SURFACES = new Set(["web", "image", "video", "audio"]);
+function normalizeSurface(value, mode) {
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (KNOWN_SURFACES.has(v)) return v;
+  }
+  if (mode === "image" || mode === "video" || mode === "audio") return mode;
+  return "web";
 }
 
 // Validate platform tag — only desktop / mobile are meaningful for the

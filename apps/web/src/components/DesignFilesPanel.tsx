@@ -308,6 +308,15 @@ function DfPreview({
           <img src={`${url}?v=${Math.round(file.mtime)}`} alt={file.name} />
         ) : file.kind === 'html' ? (
           <iframe title={file.name} src={url} sandbox="allow-scripts" />
+        ) : file.kind === 'video' ? (
+          <video
+            src={`${url}?v=${Math.round(file.mtime)}`}
+            controls
+            playsInline
+            preload="metadata"
+          />
+        ) : file.kind === 'audio' ? (
+          <audio src={`${url}?v=${Math.round(file.mtime)}`} controls preload="metadata" />
         ) : (
           <div
             style={{

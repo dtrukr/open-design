@@ -103,11 +103,22 @@ export interface Dict {
   'settings.modelCustom': string;
   'settings.modelCustomLabel': string;
   'settings.modelCustomPlaceholder': string;
+  'settings.mediaProviders': string;
+  'settings.mediaProvidersHint': string;
+  'settings.mediaProviderApiKey': string;
+  'settings.mediaProviderBaseUrl': string;
+  'settings.mediaProviderConfigured': string;
+  'settings.mediaProviderUnset': string;
+  'settings.mediaProviderClear': string;
+  'settings.mediaProviderPlaceholder': string;
+  'settings.mediaProviderBaseUrlPlaceholder': string;
 
   // Entry view / tabs
   'entry.tabDesigns': string;
   'entry.tabExamples': string;
   'entry.tabDesignSystems': string;
+  'entry.tabImageTemplates': string;
+  'entry.tabVideoTemplates': string;
   'entry.openSettingsTitle': string;
   'entry.openSettingsAria': string;
   'entry.resizeAria': string;
@@ -121,6 +132,9 @@ export interface Dict {
   'newproj.titlePrototype': string;
   'newproj.titleDeck': string;
   'newproj.titleTemplate': string;
+  'newproj.titleImage': string;
+  'newproj.titleVideo': string;
+  'newproj.titleAudio': string;
   'newproj.titleOther': string;
   'newproj.namePlaceholder': string;
   'newproj.fidelityLabel': string;
@@ -160,6 +174,41 @@ export interface Dict {
   'newproj.dsFootClear': string;
   'newproj.dsBadgeDefault': string;
   'newproj.dsPrimaryFallback': string;
+  'newproj.surfaceImage': string;
+  'newproj.surfaceVideo': string;
+  'newproj.surfaceAudio': string;
+  'newproj.modelLabel': string;
+  'newproj.aspectLabel': string;
+  'newproj.imageStyleLabel': string;
+  'newproj.imageStylePlaceholder': string;
+  'newproj.videoLengthLabel': string;
+  'newproj.videoLengthSeconds': string;
+  'newproj.audioKindLabel': string;
+  'newproj.audioKindMusic': string;
+  'newproj.audioKindSpeech': string;
+  'newproj.audioKindSfx': string;
+  'newproj.audioDurationLabel': string;
+  'newproj.audioDurationSeconds': string;
+  'newproj.voiceLabel': string;
+  'newproj.voicePlaceholder': string;
+
+  // Prompt templates
+  'promptTemplates.searchPlaceholder': string;
+  'promptTemplates.countLabel': string;
+  'promptTemplates.emptyImage': string;
+  'promptTemplates.emptyVideo': string;
+  'promptTemplates.emptyNoMatch': string;
+  'promptTemplates.attributionFooter': string;
+  'promptTemplates.openPreviewTitle': string;
+  'promptTemplates.sourcePrefix': string;
+  'promptTemplates.fetchError': string;
+  'promptTemplates.promptLabel': string;
+  'promptTemplates.copyPrompt': string;
+  'promptTemplates.copyDone': string;
+  'promptTemplates.modelHint': string;
+  'promptTemplates.openSource': string;
+  'promptTemplates.openFullscreen': string;
+  'promptTemplates.closeFullscreen': string;
 
   // Designs tab
   'designs.subRecent': string;
@@ -186,6 +235,11 @@ export interface Dict {
 
   // Examples tab
   'examples.typeLabel': string;
+  'examples.surfaceLabel': string;
+  'examples.surfaceWeb': string;
+  'examples.surfaceImage': string;
+  'examples.surfaceVideo': string;
+  'examples.surfaceAudio': string;
   'examples.scenarioLabel': string;
   'examples.modeAll': string;
   'examples.modePrototypeDesktop': string;
@@ -222,9 +276,17 @@ export interface Dict {
   'examples.tagDesignSystem': string;
   'examples.tagMobilePrototype': string;
   'examples.tagDesktopPrototype': string;
+  'examples.tagImage': string;
+  'examples.tagVideo': string;
+  'examples.tagAudio': string;
   'examples.previewLabel': string;
 
   // Design systems tab
+  'ds.surfaceLabel': string;
+  'ds.surfaceWeb': string;
+  'ds.surfaceImage': string;
+  'ds.surfaceVideo': string;
+  'ds.surfaceAudio': string;
   'ds.searchPlaceholder': string;
   'ds.emptyNoMatch': string;
   'ds.badgeDefault': string;
@@ -400,6 +462,8 @@ export interface Dict {
   'fileViewer.markdownErrorMeta': string;
   'fileViewer.markdownStreamingStatus': string;
   'fileViewer.markdownErrorStatus': string;
+  'fileViewer.videoMeta': string;
+  'fileViewer.audioMeta': string;
   'fileViewer.reload': string;
   'fileViewer.reloadDisk': string;
   'fileViewer.copy': string;

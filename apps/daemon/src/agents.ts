@@ -165,7 +165,14 @@ export const AGENT_DEFS = [
     // Prompt delivered via stdin (`codex exec -`) to avoid Windows
     // `spawn ENAMETOOLONG` while keeping Codex on its structured JSON stream.
     buildArgs: (_prompt, _imagePaths, _extra, options = {}, runtimeContext = {}) => {
-      const args = ['exec', '--json', '--skip-git-repo-check', '--full-auto'];
+      const args = [
+        'exec',
+        '--json',
+        '--skip-git-repo-check',
+        '--full-auto',
+        '-c',
+        'sandbox_workspace_write.network_access=true',
+      ];
       if (process.env.OD_CODEX_DISABLE_PLUGINS === '1') {
         args.push('--disable', 'plugins');
       }

@@ -26,8 +26,13 @@ const allowedExactPaths = new Set([
   "packages/platform/esbuild.config.mjs",
   "packages/sidecar/esbuild.config.mjs",
   "packages/sidecar-proto/esbuild.config.mjs",
+  // Maintainer utility scripts ported from the media branch. They are
+  // executed directly by Node and are not loaded by the app runtime.
+  "scripts/import-prompt-templates.mjs",
   "scripts/postinstall.mjs",
   "apps/packaged/esbuild.config.mjs",
+  "scripts/sync-hyperframes-skill.mjs",
+  "scripts/verify-media-models.mjs",
   "tools/dev/bin/tools-dev.mjs",
   "tools/dev/esbuild.config.mjs",
   "tools/pack/bin/tools-pack.mjs",
@@ -44,6 +49,8 @@ const allowedPathPrefixes = [
   "e2e/reports/html/",
   "e2e/reports/playwright-html-report/",
   "e2e/reports/test-results/",
+  // Vendored upstream HyperFrames skill helper scripts.
+  "skills/hyperframes/scripts/",
   "test-results/",
   "vendor/",
 ];

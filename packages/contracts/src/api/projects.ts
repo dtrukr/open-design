@@ -1,6 +1,17 @@
 import type { ChatMessage } from './chat';
 
-export type ProjectKind = 'prototype' | 'deck' | 'template' | 'other';
+export type ProjectKind =
+  | 'prototype'
+  | 'deck'
+  | 'template'
+  | 'other'
+  | 'image'
+  | 'video'
+  | 'audio';
+
+export type MediaAspect = '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
+
+export type AudioKind = 'music' | 'speech' | 'sfx';
 
 export type ProjectDisplayStatus =
   | 'not_started'
@@ -28,6 +39,16 @@ export interface ProjectMetadata {
   importedFrom?: 'claude-design' | string;
   entryFile?: string;
   sourceFileName?: string;
+  imageModel?: string;
+  imageAspect?: MediaAspect;
+  imageStyle?: string;
+  videoModel?: string;
+  videoLength?: number;
+  videoAspect?: MediaAspect;
+  audioKind?: AudioKind;
+  audioModel?: string;
+  audioDuration?: number;
+  voice?: string;
 }
 
 export interface Project {
