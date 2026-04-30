@@ -43,6 +43,9 @@ const nextConfig: NextConfig = {
             { source: '/frames/:path*', destination: `${DAEMON_ORIGIN}/frames/:path*` },
           ];
         },
+        devIndicators: {
+          position: 'bottom-right',
+        },
       }),
 };
 
