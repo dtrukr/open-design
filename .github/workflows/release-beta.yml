@@ -137,8 +137,11 @@ jobs:
 
           cp "$source_dmg" "$release_dir/$versioned_dmg"
           cp "$source_zip" "$release_dir/$versioned_zip"
-          shasum -a 256 "$release_dir/$versioned_dmg" > "$release_dir/$dmg_checksum_file"
-          shasum -a 256 "$release_dir/$versioned_zip" > "$release_dir/$zip_checksum_file"
+          (
+            cd "$release_dir"
+            shasum -a 256 "$versioned_dmg" > "$dmg_checksum_file"
+            shasum -a 256 "$versioned_zip" > "$zip_checksum_file"
+          )
 
           zip_sha512="$(openssl dgst -sha512 -binary "$release_dir/$versioned_zip" | openssl base64 -A)"
           zip_size="$(stat -f%z "$release_dir/$versioned_zip")"
