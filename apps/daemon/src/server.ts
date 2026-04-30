@@ -390,7 +390,7 @@ export function createSseResponse(res, { keepAliveIntervalMs = SSE_KEEPALIVE_INT
   };
 }
 
-export async function startServer({ port = 7456, returnServer = false } = {}) {
+export async function startServer({ port = 7456, host = process.env.OD_HOST || '127.0.0.1', returnServer = false } = {}) {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
   const db = openDatabase(PROJECT_ROOT, { dataDir: RUNTIME_DATA_DIR });
@@ -1812,10 +1812,11 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   }
 
   return new Promise((resolve) => {
-    const server = app.listen(port, '127.0.0.1', () => {
+    const server = app.listen(port, host, () => {
       const address = server.address();
       const actualPort = typeof address === 'object' && address ? address.port : port;
-      const url = `http://127.0.0.1:${actualPort}`;
+      const displayHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+      const url = `http://${displayHost}:${actualPort}`;
       resolve(returnServer ? { url, server } : url);
     });
   });
