@@ -22,7 +22,10 @@ interface Props {
   // project folder exists on disk before files land in it. Returns the
   // project id when ready.
   onEnsureProject: () => Promise<string | null>;
-  onSend: (prompt: string, attachments: ChatAttachment[]) => void;
+  onSend: (
+    prompt: string,
+    attachments: ChatAttachment[],
+  ) => void | boolean | Promise<void | boolean>;
   onStop: () => void;
   // Opens the global settings dialog (CLI / model / agent picker). The
   // composer's leading gear icon routes here so users can switch models
@@ -242,8 +245,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     async function submit() {
       const prompt = draft.trim();
       if (!prompt || streaming) return;
-      onSend(prompt, staged);
-      reset();
+      const accepted = await onSend(prompt, staged);
+      if (accepted !== false) reset();
     }
 
     // The @-picker treats the project listing as path-shaped (path + size).

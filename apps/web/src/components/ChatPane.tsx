@@ -51,7 +51,10 @@ interface Props {
   // set to decide whether a path can be opened as a tab.
   projectFileNames?: Set<string>;
   onEnsureProject: () => Promise<string | null>;
-  onSend: (prompt: string, attachments: ChatAttachment[]) => void;
+  onSend: (
+    prompt: string,
+    attachments: ChatAttachment[],
+  ) => void | boolean | Promise<void | boolean>;
   onStop: () => void;
   // Click-to-open chain: passes a basename up to ProjectView, which sets
   // FileWorkspace's openRequest. Tool cards, attachment chips, and

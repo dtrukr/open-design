@@ -53,6 +53,7 @@ import { Icon } from './Icon';
 
 interface Props {
   project: Project;
+  initialConversationId?: string | null;
   routeFileName: string | null;
   config: AppConfig;
   agents: AgentInfo[];
@@ -76,6 +77,7 @@ interface Props {
 
 export function ProjectView({
   project,
+  initialConversationId = null,
   routeFileName,
   config,
   agents,
@@ -96,7 +98,7 @@ export function ProjectView({
   const t = useT();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    null,
+    initialConversationId,
   );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -135,6 +137,7 @@ export function ProjectView({
   // the agent's Write actually completes, without the previous synthetic
   // "live" tab that was causing flicker against manual opens.
   const pendingWritesRef = useRef<Map<string, string>>(new Map());
+  const preferredConversationIdRef = useRef<string | null>(initialConversationId);
 
   // Load conversations on project switch. If none exist (older projects
   // pre-conversations, or a freshly created one whose default seed got
@@ -150,10 +153,16 @@ export function ProjectView({
         if (fresh) {
           setConversations([fresh]);
           setActiveConversationId(fresh.id);
+          preferredConversationIdRef.current = fresh.id;
         }
       } else {
+        const preferred = preferredConversationIdRef.current;
+        const nextActive = preferred && list.some((c) => c.id === preferred)
+          ? preferred
+          : list[0]!.id;
         setConversations(list);
-        setActiveConversationId(list[0]!.id);
+        setActiveConversationId(nextActive);
+        preferredConversationIdRef.current = nextActive;
       }
     })();
     return () => {
@@ -572,7 +581,10 @@ export function ProjectView({
 
   const handleSend = useCallback(
     async (prompt: string, attachments: ChatAttachment[]) => {
-      if (!activeConversationId) return;
+      if (!activeConversationId) {
+        setError('Conversation is still loading. Try again in a moment.');
+        return false;
+      }
       setError(null);
       const startedAt = Date.now();
       const userMsg: ChatMessage = {
@@ -815,6 +827,7 @@ export function ProjectView({
           onError: handlers.onError,
         });
       }
+      return true;
     },
     [
       activeConversationId,
@@ -957,11 +970,13 @@ export function ProjectView({
   const handleNewConversation = useCallback(async () => {
     const fresh = await createConversation(project.id);
     if (!fresh) return;
+    preferredConversationIdRef.current = fresh.id;
     setConversations((curr) => [fresh, ...curr]);
     setActiveConversationId(fresh.id);
   }, [project.id]);
 
   const handleSelectConversation = useCallback((id: string) => {
+    preferredConversationIdRef.current = id;
     setActiveConversationId(id);
   }, []);
 
@@ -977,10 +992,12 @@ export function ProjectView({
           void createConversation(project.id).then((fresh) => {
             if (fresh) {
               setConversations([fresh]);
+              preferredConversationIdRef.current = fresh.id;
               setActiveConversationId(fresh.id);
             }
           });
         } else if (id === activeConversationId) {
+          preferredConversationIdRef.current = next[0]!.id;
           setActiveConversationId(next[0]!.id);
         }
         return next;

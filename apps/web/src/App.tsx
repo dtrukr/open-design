@@ -38,6 +38,7 @@ export function App() {
   const [designSystems, setDesignSystems] = useState<DesignSystemSummary[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [templates, setTemplates] = useState<ProjectTemplate[]>([]);
+  const [createdConversationIds, setCreatedConversationIds] = useState<Record<string, string>>({});
   // Goes false once the bootstrap effect has finished its initial round of
   // fetches. The entry view uses this to show shimmer / skeleton states
   // instead of an "empty" page that flickers before data lands.
@@ -179,6 +180,10 @@ export function App() {
       });
       if (!result) return;
       setProjects((curr) => [result.project, ...curr.filter((p) => p.id !== result.project.id)]);
+      setCreatedConversationIds((curr) => ({
+        ...curr,
+        [result.project.id]: result.conversationId,
+      }));
       navigate({ kind: 'project', projectId: result.project.id, fileName: null });
     },
     [],
@@ -188,6 +193,10 @@ export function App() {
     const result = await importClaudeDesignZip(file);
     if (!result) return;
     setProjects((curr) => [result.project, ...curr.filter((p) => p.id !== result.project.id)]);
+    setCreatedConversationIds((curr) => ({
+      ...curr,
+      [result.project.id]: result.conversationId,
+    }));
     navigate({
       kind: 'project',
       projectId: result.project.id,
@@ -288,6 +297,7 @@ export function App() {
         <ProjectView
           key={activeProject.id}
           project={activeProject}
+          initialConversationId={createdConversationIds[activeProject.id] ?? null}
           routeFileName={route.kind === 'project' ? route.fileName : null}
           config={config}
           agents={agents}
