@@ -224,7 +224,7 @@ Read the references when:
 - **Patching individual slides without naming the systemic cause.** If you fix slide 5 by lowering its block by 0.2", you'll be back fixing slide 9, 11, and 14 next. Find the rule that produced all four problems.
 - **Trusting the original export script's intent.** Always run the extractor against the actual file. Drift between intent and reality is the bug.
 - **Skipping verification because "it looked fine in PowerPoint preview".** Preview anti-aliasing hides 1–2 mm overflows. The script doesn't.
-- **Italicizing CJK display type.** No CJK serif on macOS / Windows ships with a real italic — synthesizing it produces a slanted bitmap. Italicize *only* runs that are EN/Latin display copy.
+- **Italicizing scripts that have no italic tradition.** CJK, Arabic, Hebrew, Devanagari, Thai, and Khmer all produce a synthesized slant when forced into `italic=True`, and the result looks mechanically deformed. Italicize *only* runs whose primary script supports italic — Latin, Cyrillic, Greek. See `references/font-discipline.md` Layer 5 for the implementation pattern.
 - **Using `MARGIN_TOP` for hero slides.** Hero slides need *budget centering*, not top-anchored. This is the most common hero defect and the cheapest to fix.
 
 ---
