@@ -177,23 +177,91 @@ function injectDeckBridge(doc: string): string {
       document.dispatchEvent(new KeyboardEvent('keyup', init));
     } catch (_) {}
   }
+  function pad2(n){ return (n < 10 ? '0' : '') + n; }
+  function activeClassName(list){
+    var names = ['active', 'is-active', 'current'];
+    for (var n=0; n<names.length; n++) {
+      for (var i=0; i<list.length; i++) {
+        if (list[i].classList && list[i].classList.contains(names[n])) return names[n];
+      }
+    }
+    return 'active';
+  }
+  function canSetActive(list){
+    if (findActiveByClass(list) >= 0) return true;
+    for (var i=0; i<list.length; i++) {
+      if (list[i].style.display === 'none') return true;
+      if (list[i].style.visibility === 'hidden') return true;
+      if (list[i].hasAttribute('hidden')) return true;
+    }
+    return false;
+  }
+  function updateDeckChrome(i, count){
+    var cur = document.getElementById('deck-cur');
+    var total = document.getElementById('deck-total');
+    var prev = document.getElementById('deck-prev');
+    var next = document.getElementById('deck-next');
+    if (cur) cur.textContent = pad2(i + 1);
+    if (total) total.textContent = pad2(count);
+    if (prev) prev.toggleAttribute('disabled', i <= 0);
+    if (next) next.toggleAttribute('disabled', i >= count - 1);
+  }
+  function setActive(i){
+    var list = slides();
+    if (!list.length) return false;
+    var target = Math.max(0, Math.min(list.length - 1, i));
+    var activeClass = activeClassName(list);
+    var usesInlineDisplay = false;
+    var usesInlineVisibility = false;
+    var usesHidden = false;
+    for (var j=0; j<list.length; j++) {
+      usesInlineDisplay = usesInlineDisplay || list[j].style.display === 'none';
+      usesInlineVisibility = usesInlineVisibility || list[j].style.visibility === 'hidden';
+      usesHidden = usesHidden || list[j].hasAttribute('hidden');
+    }
+    for (var k=0; k<list.length; k++) {
+      if (list[k].classList) {
+        list[k].classList.remove('active', 'is-active', 'current');
+        if (k === target) list[k].classList.add(activeClass);
+      }
+      if (usesHidden) {
+        if (k === target) list[k].removeAttribute('hidden');
+        else list[k].setAttribute('hidden', '');
+      }
+      if (usesInlineDisplay && list[k].style) {
+        list[k].style.display = k === target ? '' : 'none';
+      }
+      if (usesInlineVisibility && list[k].style) {
+        list[k].style.visibility = k === target ? '' : 'hidden';
+      }
+    }
+    updateDeckChrome(target, list.length);
+    report();
+    return true;
+  }
   function scrollGo(i){
     var list = slides();
     var next = Math.max(0, Math.min(list.length - 1, i));
     scroller().scrollTo({ left: next * window.innerWidth, behavior: 'smooth' });
     setTimeout(report, 380);
   }
+  function targetFor(action, list){
+    var i = activeIndex(list);
+    if (action === 'next') return i + 1;
+    if (action === 'prev') return i - 1;
+    if (action === 'first') return 0;
+    if (action === 'last') return list.length - 1;
+    return i;
+  }
   function go(action){
     var list = slides();
     if (!list.length) return;
+    var target = Math.max(0, Math.min(list.length - 1, targetFor(action, list)));
     if (isScrollDeck()) {
-      var i = activeIndex(list);
-      if (action === 'next') scrollGo(i + 1);
-      else if (action === 'prev') scrollGo(i - 1);
-      else if (action === 'first') scrollGo(0);
-      else if (action === 'last') scrollGo(list.length - 1);
+      scrollGo(target);
       return;
     }
+    if (canSetActive(list) && setActive(target)) return;
     if (action === 'next') dispatchKey('ArrowRight');
     else if (action === 'prev') dispatchKey('ArrowLeft');
     else if (action === 'first') dispatchKey('Home');
@@ -205,6 +273,7 @@ function injectDeckBridge(doc: string): string {
     if (!list.length) return;
     var target = Math.max(0, Math.min(list.length - 1, i));
     if (isScrollDeck()) { scrollGo(target); return; }
+    if (canSetActive(list) && setActive(target)) return;
     var current = activeIndex(list);
     var diff = target - current;
     if (!diff) { report(); return; }
@@ -229,6 +298,18 @@ function injectDeckBridge(doc: string): string {
     if (data.action === 'go' && typeof data.index === 'number') gotoIndex(data.index);
     else go(data.action);
   });
+  function ownDeckButton(id, action){
+    var btn = document.getElementById(id);
+    if (!btn || btn.__odDeckOwned) return;
+    btn.__odDeckOwned = true;
+    btn.addEventListener('click', function(e){
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      go(action);
+    }, true);
+  }
+  ownDeckButton('deck-prev', 'prev');
+  ownDeckButton('deck-next', 'next');
   // Report once on load and on every scroll-end so the host stays in sync.
   window.addEventListener('load', function(){ setTimeout(report, 200); });
   document.addEventListener('scroll', function(){
