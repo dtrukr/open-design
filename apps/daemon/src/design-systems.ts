@@ -9,44 +9,60 @@ import path from 'node:path';
 
 export async function listDesignSystems(root) {
   const out = [];
-  let entries = [];
-  try {
-    entries = await readdir(root, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const designPath = path.join(root, entry.name, 'DESIGN.md');
+  const seen = new Set();
+  for (const currentRoot of normalizeRoots(root)) {
+    let entries = [];
     try {
-      const stats = await stat(designPath);
-      if (!stats.isFile()) continue;
-      const raw = await readFile(designPath, 'utf8');
-      const titleMatch = /^#\s+(.+?)\s*$/m.exec(raw);
-      const title = cleanTitle(titleMatch?.[1] ?? entry.name);
-      out.push({
-        id: entry.name,
-        title,
-        category: extractCategory(raw) ?? 'Uncategorized',
-        summary: summarize(raw),
-        swatches: extractSwatches(raw),
-        surface: extractSurface(raw),
-        body: raw,
-      });
+      entries = await readdir(currentRoot, { withFileTypes: true });
     } catch {
-      // Skip.
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || seen.has(entry.name)) continue;
+      const designPath = path.join(currentRoot, entry.name, 'DESIGN.md');
+      try {
+        const stats = await stat(designPath);
+        if (!stats.isFile()) continue;
+        const raw = await readFile(designPath, 'utf8');
+        const titleMatch = /^#\s+(.+?)\s*$/m.exec(raw);
+        const title = cleanTitle(titleMatch?.[1] ?? entry.name);
+        seen.add(entry.name);
+        out.push({
+          id: entry.name,
+          title,
+          category: extractCategory(raw) ?? 'Uncategorized',
+          summary: summarize(raw),
+          swatches: extractSwatches(raw),
+          surface: extractSurface(raw),
+          body: raw,
+        });
+      } catch {
+        // Skip.
+      }
     }
   }
   return out;
 }
 
 export async function readDesignSystem(root, id) {
-  const file = path.join(root, id, 'DESIGN.md');
-  try {
-    return await readFile(file, 'utf8');
-  } catch {
-    return null;
+  if (!isSafeDesignSystemId(id)) return null;
+  for (const currentRoot of normalizeRoots(root)) {
+    const file = path.join(currentRoot, id, 'DESIGN.md');
+    try {
+      return await readFile(file, 'utf8');
+    } catch {
+      // Try the next root.
+    }
   }
+  return null;
+}
+
+function normalizeRoots(root) {
+  return Array.isArray(root) ? root : [root];
+}
+
+function isSafeDesignSystemId(id) {
+  return /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(String(id ?? ''));
 }
 
 function summarize(raw) {
@@ -59,6 +75,7 @@ function summarize(raw) {
     .join('\n')
     // Drop the Category metadata line — it's surfaced separately.
     .replace(/^>\s*Category:.*$/gim, '')
+    .replace(/^>\s*Surface:.*$/gim, '')
     .replace(/^>\s*/gm, '')
     .trim();
   return window.split(/\n\n/)[0]?.slice(0, 240) ?? '';

@@ -649,6 +649,7 @@ function extractSubtitle(raw) {
   const window = (nextHeading === -1 ? after : after.slice(0, nextHeading))
     .join('\n')
     .replace(/^>\s*Category:.*$/gim, '')
+    .replace(/^>\s*Surface:.*$/gim, '')
     .replace(/^>\s*/gm, '')
     .trim();
   return window.split(/\n\n/)[0]?.slice(0, 240) ?? '';

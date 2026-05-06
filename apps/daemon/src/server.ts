@@ -32,6 +32,7 @@ import { validateLinkedDirs } from './linked-dirs.js';
 import { listCodexPets, readCodexPetSpritesheet } from './codex-pets.js';
 import { syncCommunityPets } from './community-pets-sync.js';
 import { listDesignSystems, readDesignSystem } from './design-systems.js';
+import { createReferoDesignSystemSyncer } from './refero-design-systems.js';
 import { attachAcpSession } from './acp.js';
 import { attachPiRpcSession } from './pi-rpc.js';
 import { createClaudeStreamHandler } from './claude-stream.js';
@@ -690,7 +691,16 @@ export function resolveDataDir(raw, projectRoot) {
 const RUNTIME_DATA_DIR = resolveDataDir(process.env.OD_DATA_DIR, PROJECT_ROOT);
 const ARTIFACTS_DIR = path.join(RUNTIME_DATA_DIR, 'artifacts');
 const PROJECTS_DIR = path.join(RUNTIME_DATA_DIR, 'projects');
+const REFERO_DESIGN_SYSTEMS_DIR = path.join(RUNTIME_DATA_DIR, 'refero-design-systems');
+const DESIGN_SYSTEM_ROOTS = [DESIGN_SYSTEMS_DIR, REFERO_DESIGN_SYSTEMS_DIR];
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+
+function positiveIntEnv(name, fallback = null) {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 const activeChatAgentEventSinks = new Map();
 const activeProjectEventSinks = new Map();
@@ -1436,6 +1446,20 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   await recoverStaleLiveArtifactRefreshes({ projectsRoot: PROJECTS_DIR }).catch((error) => {
     console.warn('[od] Failed to recover stale live artifact refreshes:', error);
   });
+
+  const referoDesignSystemSyncer = createReferoDesignSystemSyncer({
+    rootDir: REFERO_DESIGN_SYSTEMS_DIR,
+    enabled: process.env.OD_REFERO_DESIGN_SYSTEMS !== '0',
+    intervalMs: positiveIntEnv('OD_REFERO_DESIGN_SYSTEMS_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    staleMs: positiveIntEnv('OD_REFERO_DESIGN_SYSTEMS_STALE_MS', 24 * 60 * 60 * 1000),
+    maxPages: positiveIntEnv('OD_REFERO_DESIGN_SYSTEMS_MAX_PAGES'),
+    maxStyles: positiveIntEnv('OD_REFERO_DESIGN_SYSTEMS_MAX_STYLES'),
+    concurrency: positiveIntEnv('OD_REFERO_DESIGN_SYSTEMS_CONCURRENCY', 8),
+    timeoutMs: positiveIntEnv('OD_REFERO_DESIGN_SYSTEMS_TIMEOUT_MS', 30_000),
+    sort: process.env.OD_REFERO_DESIGN_SYSTEMS_SORT || null,
+    log: (message) => console.log(message),
+  });
+  referoDesignSystemSyncer.start();
 
   if (fs.existsSync(STATIC_DIR)) {
     app.use(express.static(STATIC_DIR));
@@ -2236,18 +2260,32 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
 
   app.get('/api/design-systems', async (_req, res) => {
     try {
-      const systems = await listDesignSystems(DESIGN_SYSTEMS_DIR);
+      const systems = await listDesignSystems(DESIGN_SYSTEM_ROOTS);
       res.json({
         designSystems: systems.map(({ body, ...rest }) => rest),
+        refero: referoDesignSystemSyncer.status(),
       });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
   });
 
+  app.get('/api/design-systems/refero/status', async (_req, res) => {
+    res.json({ refero: referoDesignSystemSyncer.status() });
+  });
+
+  app.post('/api/design-systems/refero/sync', requireLocalDaemonRequest, async (_req, res) => {
+    try {
+      const result = await referoDesignSystemSyncer.run(true);
+      res.json({ refero: referoDesignSystemSyncer.status(), result });
+    } catch (err) {
+      res.status(500).json({ error: String(err), refero: referoDesignSystemSyncer.status() });
+    }
+  });
+
   app.get('/api/design-systems/:id', async (req, res) => {
     try {
-      const body = await readDesignSystem(DESIGN_SYSTEMS_DIR, req.params.id);
+      const body = await readDesignSystem(DESIGN_SYSTEM_ROOTS, req.params.id);
       if (body === null)
         return res.status(404).json({ error: 'design system not found' });
       res.json({ id: req.params.id, body });
@@ -2288,7 +2326,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // file shows up on the next view, no rebuild needed.
   app.get('/api/design-systems/:id/preview', async (req, res) => {
     try {
-      const body = await readDesignSystem(DESIGN_SYSTEMS_DIR, req.params.id);
+      const body = await readDesignSystem(DESIGN_SYSTEM_ROOTS, req.params.id);
       if (body === null)
         return res.status(404).type('text/plain').send('not found');
       const html = renderDesignSystemPreview(req.params.id, body);
@@ -2303,7 +2341,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // /preview: built at request time, no caching.
   app.get('/api/design-systems/:id/showcase', async (req, res) => {
     try {
-      const body = await readDesignSystem(DESIGN_SYSTEMS_DIR, req.params.id);
+      const body = await readDesignSystem(DESIGN_SYSTEM_ROOTS, req.params.id);
       if (body === null)
         return res.status(404).type('text/plain').send('not found');
       const html = renderDesignSystemShowcase(req.params.id, body);
@@ -3588,11 +3626,11 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     let designSystemBody;
     let designSystemTitle;
     if (effectiveDesignSystemId) {
-      const systems = await listDesignSystems(DESIGN_SYSTEMS_DIR);
+      const systems = await listDesignSystems(DESIGN_SYSTEM_ROOTS);
       const summary = systems.find((s) => s.id === effectiveDesignSystemId);
       designSystemTitle = summary?.title;
       designSystemBody =
-        (await readDesignSystem(DESIGN_SYSTEMS_DIR, effectiveDesignSystemId)) ??
+        (await readDesignSystem(DESIGN_SYSTEM_ROOTS, effectiveDesignSystemId)) ??
         undefined;
     }
 
@@ -3826,7 +3864,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       codexGeneratedImagesDir = validateCodexGeneratedImagesDir(
         codexGeneratedImagesDir,
         {
-          protectedDirs: [SKILLS_DIR, DESIGN_SYSTEMS_DIR, ...linkedDirs],
+          protectedDirs: [SKILLS_DIR, ...DESIGN_SYSTEM_ROOTS, ...linkedDirs],
         },
       );
     }
