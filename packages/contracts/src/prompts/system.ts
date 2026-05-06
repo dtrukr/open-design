@@ -33,13 +33,22 @@ import type { ProjectMetadata, ProjectTemplate } from '../api/projects';
 import { OFFICIAL_DESIGNER_PROMPT } from './official-system';
 import { DISCOVERY_AND_PHILOSOPHY } from './discovery';
 import { DECK_FRAMEWORK_DIRECTIVE } from './deck-framework';
+import { MEDIA_GENERATION_CONTRACT } from './media-contract';
 
 export const BASE_SYSTEM_PROMPT = OFFICIAL_DESIGNER_PROMPT;
 
 export interface ComposeInput {
   skillBody?: string | undefined;
   skillName?: string | undefined;
-  skillMode?: 'prototype' | 'deck' | 'template' | 'design-system' | undefined;
+  skillMode?:
+    | 'prototype'
+    | 'deck'
+    | 'template'
+    | 'design-system'
+    | 'image'
+    | 'video'
+    | 'audio'
+    | undefined;
   designSystemBody?: string | undefined;
   designSystemTitle?: string | undefined;
   // Project-level metadata captured by the new-project panel. Drives the
@@ -111,6 +120,17 @@ export function composeSystemPrompt({
     parts.push(`\n\n---\n\n${DECK_FRAMEWORK_DIRECTIVE}`);
   }
 
+  const isMediaSurface =
+    skillMode === 'image' ||
+    skillMode === 'video' ||
+    skillMode === 'audio' ||
+    metadata?.kind === 'image' ||
+    metadata?.kind === 'video' ||
+    metadata?.kind === 'audio';
+  if (isMediaSurface) {
+    parts.push(MEDIA_GENERATION_CONTRACT);
+  }
+
   return parts.join('');
 }
 
@@ -126,6 +146,14 @@ function renderMetadataBlock(
   );
   lines.push('');
   lines.push(`- **kind**: ${metadata.kind}`);
+  if (metadata.intent === 'live-artifact') {
+    lines.push(
+      '- **intent**: live-artifact — the user chose New live artifact. The first output should be a live artifact/dashboard/report, not a one-off static mockup. Prefer the `live-artifact` skill workflow when available, keep source data compact, and register through the daemon live-artifact tool path once that wrapper/tooling is available.',
+    );
+    lines.push(
+      '- **connector-source rule**: if the user names a connector/source (for example Notion) and daemon connector tools are available, list connectors before asking where the data comes from. When the named connector is `connected`, use its read-only tools and ask follow-up questions only for missing topic/page/database details, multiple equally plausible matches, or an unconnected/missing connector.',
+    );
+  }
 
   if (metadata.kind === 'prototype') {
     lines.push(
@@ -145,11 +173,124 @@ function renderMetadataBlock(
       lines.push(`- **template**: ${metadata.templateLabel}`);
     }
   }
+  if (metadata.kind === 'image') {
+    lines.push(
+      `- **imageModel**: ${metadata.imageModel ?? '(unknown - ask: which image model to use)'}`,
+    );
+    lines.push(
+      `- **aspectRatio**: ${metadata.imageAspect ?? '(unknown - ask: 1:1, 16:9, 9:16, 4:3, 3:4)'}`,
+    );
+    if (metadata.imageStyle) {
+      lines.push(`- **styleNotes**: ${metadata.imageStyle}`);
+    }
+    if (metadata.promptTemplate && metadata.promptTemplate.prompt.trim().length > 0) {
+      lines.push(`- **referenceTemplate**: ${metadata.promptTemplate.title}`);
+    }
+    lines.push('');
+    lines.push(
+      'This is an **image** project. Plan the prompt carefully, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface image --model <imageModel>`. Do NOT emit `<artifact>` HTML for media surfaces.',
+    );
+  }
+  if (metadata.kind === 'video') {
+    lines.push(
+      `- **videoModel**: ${metadata.videoModel ?? '(unknown - ask: which video model to use)'}`,
+    );
+    lines.push(
+      `- **lengthSeconds**: ${typeof metadata.videoLength === 'number' ? metadata.videoLength : '(unknown - ask: 3s / 5s / 10s)'}`,
+    );
+    lines.push(
+      `- **aspectRatio**: ${metadata.videoAspect ?? '(unknown - ask: 16:9, 9:16, 1:1)'}`,
+    );
+    if (metadata.promptTemplate && metadata.promptTemplate.prompt.trim().length > 0) {
+      lines.push(`- **referenceTemplate**: ${metadata.promptTemplate.title}`);
+    }
+    lines.push('');
+    lines.push(
+      'This is a **video** project. Plan the shotlist and motion, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface video --model <videoModel> --length <seconds> --aspect <ratio>`. Do NOT emit `<artifact>` HTML.',
+    );
+    if (metadata.videoModel === 'hyperframes-html') {
+      lines.push(
+        'Special case: `hyperframes-html` is a local HTML-to-MP4 renderer, not a photoreal text-to-video model. Treat it like a motion design renderer, ask at most one clarifying question, then dispatch immediately.',
+      );
+    }
+  }
+  if (metadata.kind === 'audio') {
+    lines.push(
+      `- **audioKind**: ${metadata.audioKind ?? '(unknown - ask: music / speech / sfx)'}`,
+    );
+    lines.push(
+      `- **audioModel**: ${metadata.audioModel ?? '(unknown - ask: which audio model to use)'}`,
+    );
+    lines.push(
+      `- **durationSeconds**: ${typeof metadata.audioDuration === 'number' ? metadata.audioDuration : '(unknown - ask: target duration)'}`,
+    );
+    if (metadata.voice) {
+      lines.push(`- **voice**: ${metadata.voice}`);
+    } else if (metadata.audioKind === 'speech') {
+      lines.push('- **voice**: (unknown - ask: voice id / accent / pacing)');
+    }
+    lines.push('');
+    lines.push(
+      'This is an **audio** project. Lock the content intent first, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface audio --audio-kind <kind> --model <audioModel> --duration <seconds>` and add `--voice <voice-id>` for speech when you have a provider-specific voice id. Do NOT emit `<artifact>` HTML.',
+    );
+  }
 
   if (metadata.inspirationDesignSystemIds && metadata.inspirationDesignSystemIds.length > 0) {
     lines.push(
       `- **inspirationDesignSystemIds**: ${metadata.inspirationDesignSystemIds.join(', ')} — the user picked these systems as *additional* inspiration alongside the primary one. Borrow palette accents, typographic personality, or component patterns from them; don't replace the primary system's tokens.`,
     );
+  }
+
+  // Curated prompt template reference for image/video projects. Inlined
+  // verbatim (with light truncation) so the agent can borrow structure,
+  // mood and phrasing without a separate fetch. The user may have edited
+  // the body before clicking Create — those edits land here and are now
+  // authoritative for the brief.
+  if (
+    (metadata.kind === 'image' || metadata.kind === 'video') &&
+    metadata.promptTemplate &&
+    metadata.promptTemplate.prompt.trim().length > 0
+  ) {
+    const tpl = metadata.promptTemplate;
+    lines.push('');
+    lines.push(`### Reference prompt template — "${tpl.title}"`);
+    const meta: string[] = [];
+    if (tpl.category) meta.push(`category: ${tpl.category}`);
+    if (tpl.model) meta.push(`suggested model: ${tpl.model}`);
+    if (tpl.aspect) meta.push(`aspect: ${tpl.aspect}`);
+    if (tpl.tags && tpl.tags.length > 0) {
+      meta.push(`tags: ${tpl.tags.join(', ')}`);
+    }
+    if (meta.length > 0) lines.push(meta.join(' · '));
+    if (tpl.summary) {
+      lines.push('');
+      lines.push(tpl.summary);
+    }
+    lines.push('');
+    lines.push(
+      'The user picked this template as inspiration. Treat it as a structural and stylistic reference: borrow composition, palette cues, lighting language, lens/motion direction, and the level of detail. Adapt the wording to the user\'s actual subject and brief — do NOT generate the template subject verbatim. If a field above is unknown the user wants you to follow the template\'s defaults.',
+    );
+    // Escape triple-backticks so a user who pastes ``` into the editable
+    // template body can't break out of the markdown fence below and inject
+    // free-form instructions into the agent's system prompt. Zero-width
+    // joiner between the backticks keeps the prompt human-readable while
+    // preventing the closing fence from matching prematurely.
+    const safe = tpl.prompt.replace(/```/g, '`\u200b`\u200b`');
+    const truncated =
+      safe.length > 4000
+        ? `${safe.slice(0, 4000)}\n… (truncated ${safe.length - 4000} chars)`
+        : safe;
+    lines.push('');
+    lines.push('```text');
+    lines.push(truncated);
+    lines.push('```');
+    if (tpl.source) {
+      const author = tpl.source.author ? ` by ${tpl.source.author}` : '';
+      lines.push('');
+      lines.push(
+        `Source: ${tpl.source.repo}${author} — license ${tpl.source.license}. Preserve attribution if you echo the template language directly.`,
+      );
+    }
   }
 
   if (metadata.kind === 'template' && template && template.files.length > 0) {
@@ -196,6 +337,13 @@ function derivePreflight(skillBody: string): string {
   if (/references\/themes\.md/.test(skillBody)) refs.push('`references/themes.md`');
   if (/references\/components\.md/.test(skillBody)) refs.push('`references/components.md`');
   if (/references\/checklist\.md/.test(skillBody)) refs.push('`references/checklist.md`');
+  if (/references\/artifact-schema\.md/.test(skillBody)) refs.push('`references/artifact-schema.md`');
+  if (/references\/connector-policy\.md|connector-policy\.md/.test(skillBody)) {
+    refs.push('`references/connector-policy.md`');
+  }
+  if (/references\/refresh-contract\.md|refresh-contract\.md/.test(skillBody)) {
+    refs.push('`references/refresh-contract.md`');
+  }
   if (refs.length === 0) return '';
-  return ` **Pre-flight (do this before any other tool):** Read ${refs.join(', ')} via the path written in the skill-root preamble. The seed template defines the class system you'll paste into; the layouts file is the only acceptable source of section/screen/slide skeletons; the checklist is your P0/P1/P2 gate before emitting \`<artifact>\`. Skipping this step is the #1 reason output regresses to generic AI-slop.`;
+  return ` **Pre-flight (do this before any other tool):** Read ${refs.join(', ')} via the path written in the skill-root preamble. If the skill asks for daemon wrapper commands, use the runtime tool environment documented below; it provides the daemon URL and whether a run-scoped tool token is available without exposing token internals. The seed template defines the class system you'll paste into; the layouts file is the only acceptable source of section/screen/slide skeletons; the checklist and live-artifact references are your validation gate before emitting \`<artifact>\` or registering a live artifact. Skipping this step is the #1 reason output regresses to generic AI-slop.`;
 }

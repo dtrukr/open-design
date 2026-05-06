@@ -54,6 +54,16 @@ export const DeckHtmlRenderer: ArtifactRenderer = {
   },
 };
 
+export const ReactComponentRenderer: ArtifactRenderer = {
+  id: 'react-component',
+  supportsStreaming: false,
+  canRender: ({ file }) => {
+    const manifest = resolveManifest(file);
+    if (!manifest) return false;
+    return manifest.kind === 'react-component' || manifest.renderer === 'react-component';
+  },
+};
+
 export const MarkdownRenderer: ArtifactRenderer = {
   id: 'markdown',
   supportsStreaming: true,
@@ -68,7 +78,7 @@ export const MarkdownRenderer: ArtifactRenderer = {
 
 export const SvgRenderer: ArtifactRenderer = {
   id: 'svg',
-  supportsStreaming: true,
+  supportsStreaming: false,
   canRender: ({ file }) => {
     const manifest = resolveManifest(file);
     if (!manifest) return false;
@@ -90,6 +100,7 @@ export class RendererRegistry {
 }
 
 export const artifactRendererRegistry = new RendererRegistry([
+  ReactComponentRenderer,
   DeckHtmlRenderer,
   HtmlRenderer,
   MarkdownRenderer,

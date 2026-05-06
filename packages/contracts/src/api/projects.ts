@@ -1,6 +1,17 @@
 import type { ChatMessage } from './chat';
 
-export type ProjectKind = 'prototype' | 'deck' | 'template' | 'other';
+export type ProjectKind =
+  | 'prototype'
+  | 'deck'
+  | 'template'
+  | 'other'
+  | 'image'
+  | 'video'
+  | 'audio';
+
+export type MediaAspect = '1:1' | '16:9' | '9:16' | '4:3' | '3:4';
+
+export type AudioKind = 'music' | 'speech' | 'sfx';
 
 export type ProjectDisplayStatus =
   | 'not_started'
@@ -17,8 +28,34 @@ export interface ProjectStatusInfo {
   runId?: string;
 }
 
+export interface PromptTemplateMetadataSource {
+  repo: string;
+  license: string;
+  author?: string;
+  url?: string;
+}
+
+// Subset of a curated PromptTemplate kept on the project so the agent can
+// reference it on every turn without re-reading the gallery file. The
+// `prompt` field is the (possibly user-edited) body — when the user tunes
+// it in the New Project panel before clicking Create, those edits land
+// here and become authoritative for the system prompt.
+export interface PromptTemplateMetadata {
+  id: string;
+  surface: 'image' | 'video';
+  title: string;
+  prompt: string;
+  summary?: string;
+  category?: string;
+  tags?: string[];
+  model?: string;
+  aspect?: MediaAspect;
+  source?: PromptTemplateMetadataSource;
+}
+
 export interface ProjectMetadata {
   kind: ProjectKind;
+  intent?: 'live-artifact';
   fidelity?: 'wireframe' | 'high-fidelity';
   speakerNotes?: boolean;
   animations?: boolean;
@@ -28,6 +65,22 @@ export interface ProjectMetadata {
   importedFrom?: 'claude-design' | string;
   entryFile?: string;
   sourceFileName?: string;
+  imageModel?: string;
+  imageAspect?: MediaAspect;
+  imageStyle?: string;
+  videoModel?: string;
+  videoLength?: number;
+  videoAspect?: MediaAspect;
+  audioKind?: AudioKind;
+  audioModel?: string;
+  audioDuration?: number;
+  voice?: string;
+  // Curated prompt template the user picked in the image/video tab of the
+  // New Project panel. Treated by the system-prompt composer as a stylistic
+  // and structural reference for the generation request.
+  promptTemplate?: PromptTemplateMetadata;
+  // Absolute paths to local code folders the agent can read via --add-dir.
+  linkedDirs?: string[];
 }
 
 export interface Project {
@@ -159,3 +212,47 @@ export interface DeployProjectFileRequest {
 export interface DeployProjectFileResponse extends DeploymentInfo {}
 
 export interface CheckDeploymentLinkResponse extends DeploymentInfo {}
+
+// Preflight inspects the file set that would be uploaded for a deploy
+// without sending anything to the provider. Lets the UI show file count,
+// total size, and warnings before the user pays the network round-trip.
+
+export type DeployPreflightWarningCode =
+  | 'broken-reference'
+  | 'invalid-reference'
+  | 'large-asset'
+  | 'large-bundle'
+  | 'large-html'
+  | 'external-script'
+  | 'external-stylesheet'
+  | 'no-doctype'
+  | 'no-viewport';
+
+export interface DeployPreflightWarning {
+  code: DeployPreflightWarningCode;
+  message: string;
+  path?: string;
+  url?: string;
+  size?: number;
+}
+
+export interface DeployPreflightFile {
+  path: string;
+  size: number;
+  mime: string;
+  sourcePath: string;
+}
+
+export interface DeployPreflightRequest {
+  fileName: string;
+  providerId?: DeployProviderId;
+}
+
+export interface DeployPreflightResponse {
+  providerId: DeployProviderId;
+  entry: string;
+  files: DeployPreflightFile[];
+  totalFiles: number;
+  totalBytes: number;
+  warnings: DeployPreflightWarning[];
+}

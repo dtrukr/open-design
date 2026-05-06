@@ -32,15 +32,44 @@
 import { OFFICIAL_DESIGNER_PROMPT } from './official-system.js';
 import { DISCOVERY_AND_PHILOSOPHY } from './discovery.js';
 import { DECK_FRAMEWORK_DIRECTIVE } from './deck-framework.js';
+import { MEDIA_GENERATION_CONTRACT } from './media-contract.js';
 
 type ProjectMetadata = {
   kind?: string;
+  intent?: string | null;
   fidelity?: string | null;
   speakerNotes?: boolean | null;
   animations?: boolean | null;
   templateId?: string | null;
   templateLabel?: string | null;
   inspirationDesignSystemIds?: string[];
+  imageModel?: string | null;
+  imageAspect?: string | null;
+  imageStyle?: string | null;
+  videoModel?: string | null;
+  videoLength?: number | null;
+  videoAspect?: string | null;
+  audioKind?: string | null;
+  audioModel?: string | null;
+  audioDuration?: number | null;
+  voice?: string | null;
+  promptTemplate?: {
+    id?: string | null;
+    surface?: 'image' | 'video' | null;
+    title?: string | null;
+    prompt?: string | null;
+    summary?: string | null;
+    category?: string | null;
+    tags?: string[] | null;
+    model?: string | null;
+    aspect?: string | null;
+    source?: {
+      repo?: string | null;
+      license?: string | null;
+      author?: string | null;
+      url?: string | null;
+    } | null;
+  } | null;
 };
 type ProjectTemplate = { name: string; description?: string | null; files: Array<{ name: string; content: string }> };
 
@@ -49,9 +78,24 @@ export const BASE_SYSTEM_PROMPT = OFFICIAL_DESIGNER_PROMPT;
 export interface ComposeInput {
   skillBody?: string | undefined;
   skillName?: string | undefined;
-  skillMode?: 'prototype' | 'deck' | 'template' | 'design-system' | undefined;
+  skillMode?:
+    | 'prototype'
+    | 'deck'
+    | 'template'
+    | 'design-system'
+    | 'image'
+    | 'video'
+    | 'audio'
+    | undefined;
   designSystemBody?: string | undefined;
   designSystemTitle?: string | undefined;
+  // Craft references the active skill opted into via `od.craft.requires`.
+  // The daemon resolves the slug list to file contents and concatenates
+  // them with section headers; we inject them between the DESIGN.md and
+  // the skill body so brand tokens win on conflict but craft rules
+  // (letter-spacing, accent caps, anti-slop) cover everything below.
+  craftBody?: string | undefined;
+  craftSections?: string[] | undefined;
   // Project-level metadata captured by the new-project panel. Drives the
   // agent's understanding of artifact kind, fidelity, speaker-notes intent
   // and animation intent. Missing fields here are exactly what the
@@ -69,6 +113,8 @@ export function composeSystemPrompt({
   skillMode,
   designSystemBody,
   designSystemTitle,
+  craftBody,
+  craftSections,
   metadata,
   template,
 }: ComposeInput): string {
@@ -85,6 +131,16 @@ export function composeSystemPrompt({
   if (designSystemBody && designSystemBody.trim().length > 0) {
     parts.push(
       `\n\n## Active design system${designSystemTitle ? ` — ${designSystemTitle}` : ''}\n\nTreat the following DESIGN.md as authoritative for color, typography, spacing, and component rules. Do not invent tokens outside this palette. When you copy the active skill's seed template, bind these tokens into its \`:root\` block before generating any layout.\n\n${designSystemBody.trim()}`,
+    );
+  }
+
+  if (craftBody && craftBody.trim().length > 0) {
+    const sectionLabel =
+      Array.isArray(craftSections) && craftSections.length > 0
+        ? ` — ${craftSections.join(', ')}`
+        : '';
+    parts.push(
+      `\n\n## Active craft references${sectionLabel}\n\nThe following craft rules are universal — they apply on top of the active design system above, regardless of brand. The DESIGN.md decides *which* tokens to use; craft rules decide *how* to use them. On any conflict between a craft rule and a brand DESIGN.md, the brand wins for token values; craft rules still apply to anything the brand does not override (letter-spacing, accent overuse caps, anti-slop patterns).\n\n${craftBody.trim()}`,
     );
   }
 
@@ -121,6 +177,17 @@ export function composeSystemPrompt({
     parts.push(`\n\n---\n\n${DECK_FRAMEWORK_DIRECTIVE}`);
   }
 
+  const isMediaSurface =
+    skillMode === 'image' ||
+    skillMode === 'video' ||
+    skillMode === 'audio' ||
+    metadata?.kind === 'image' ||
+    metadata?.kind === 'video' ||
+    metadata?.kind === 'audio';
+  if (isMediaSurface) {
+    parts.push(MEDIA_GENERATION_CONTRACT);
+  }
+
   return parts.join('');
 }
 
@@ -136,6 +203,14 @@ function renderMetadataBlock(
   );
   lines.push('');
   lines.push(`- **kind**: ${metadata.kind}`);
+  if (metadata.intent === 'live-artifact') {
+    lines.push(
+      '- **intent**: live-artifact — the user chose New live artifact. The first output should be a live artifact/dashboard/report, not a one-off static mockup. Prefer the `live-artifact` skill workflow when available, keep source data compact, and register through the daemon live-artifact tool path once that wrapper/tooling is available.',
+    );
+    lines.push(
+      '- **connector-source rule**: if the user names a connector/source (for example Notion) and daemon connector tools are available, list connectors before asking where the data comes from. When the named connector is `connected`, use its read-only tools and ask follow-up questions only for missing topic/page/database details, multiple equally plausible matches, or an unconnected/missing connector.',
+    );
+  }
 
   if (metadata.kind === 'prototype') {
     lines.push(
@@ -155,11 +230,131 @@ function renderMetadataBlock(
       lines.push(`- **template**: ${metadata.templateLabel}`);
     }
   }
+  if (metadata.kind === 'image') {
+    lines.push(
+      `- **imageModel**: ${metadata.imageModel ?? '(unknown — ask: which image model to use)'}`,
+    );
+    lines.push(
+      `- **aspectRatio**: ${metadata.imageAspect ?? '(unknown — ask: 1:1, 16:9, 9:16, 4:3, 3:4)'}`,
+    );
+    if (metadata.imageStyle) {
+      lines.push(`- **styleNotes**: ${metadata.imageStyle}`);
+    }
+    if (
+      metadata.promptTemplate?.title &&
+      typeof metadata.promptTemplate.prompt === 'string' &&
+      metadata.promptTemplate.prompt.trim().length > 0
+    ) {
+      lines.push(`- **referenceTemplate**: ${metadata.promptTemplate.title}`);
+    }
+    lines.push('');
+    lines.push(
+      'This is an **image** project. Plan the prompt carefully, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface image --model <imageModel>`. Do NOT emit `<artifact>` HTML for media surfaces.',
+    );
+  }
+  if (metadata.kind === 'video') {
+    lines.push(
+      `- **videoModel**: ${metadata.videoModel ?? '(unknown — ask: which video model to use)'}`,
+    );
+    lines.push(
+      `- **lengthSeconds**: ${typeof metadata.videoLength === 'number' ? metadata.videoLength : '(unknown — ask: 3s / 5s / 10s)'}`,
+    );
+    lines.push(
+      `- **aspectRatio**: ${metadata.videoAspect ?? '(unknown — ask: 16:9, 9:16, 1:1)'}`,
+    );
+    if (
+      metadata.promptTemplate?.title &&
+      typeof metadata.promptTemplate.prompt === 'string' &&
+      metadata.promptTemplate.prompt.trim().length > 0
+    ) {
+      lines.push(`- **referenceTemplate**: ${metadata.promptTemplate.title}`);
+    }
+    lines.push('');
+    lines.push(
+      'This is a **video** project. Plan the shotlist and motion, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface video --model <videoModel> --length <seconds> --aspect <ratio>`. Do NOT emit `<artifact>` HTML.',
+    );
+    if (metadata.videoModel === 'hyperframes-html') {
+      lines.push(
+        'Special case: `hyperframes-html` is a local HTML-to-MP4 renderer, not a photoreal text-to-video model. Treat it like a motion design renderer, ask at most one clarifying question, then dispatch immediately.',
+      );
+    }
+  }
+  if (metadata.kind === 'audio') {
+    lines.push(
+      `- **audioKind**: ${metadata.audioKind ?? '(unknown — ask: music / speech / sfx)'}`,
+    );
+    lines.push(
+      `- **audioModel**: ${metadata.audioModel ?? '(unknown — ask: which audio model to use)'}`,
+    );
+    lines.push(
+      `- **durationSeconds**: ${typeof metadata.audioDuration === 'number' ? metadata.audioDuration : '(unknown — ask: target duration)'}`,
+    );
+    if (metadata.voice) {
+      lines.push(`- **voice**: ${metadata.voice}`);
+    } else if (metadata.audioKind === 'speech') {
+      lines.push('- **voice**: (unknown — ask: voice id / accent / pacing)');
+    }
+    lines.push('');
+    lines.push(
+      'This is an **audio** project. Lock the content intent first, then dispatch via the **media generation contract** using `"$OD_NODE_BIN" "$OD_BIN" media generate --surface audio --audio-kind <kind> --model <audioModel> --duration <seconds>` and add `--voice <voice-id>` for speech when you have a provider-specific voice id. Do NOT emit `<artifact>` HTML.',
+    );
+  }
 
   if (metadata.inspirationDesignSystemIds && metadata.inspirationDesignSystemIds.length > 0) {
     lines.push(
       `- **inspirationDesignSystemIds**: ${metadata.inspirationDesignSystemIds.join(', ')} — the user picked these systems as *additional* inspiration alongside the primary one. Borrow palette accents, typographic personality, or component patterns from them; don't replace the primary system's tokens.`,
     );
+  }
+
+  // Curated prompt template reference for image/video projects. Inlined
+  // verbatim (with light truncation) so the agent can borrow structure,
+  // mood and phrasing without a separate fetch. The user may have edited
+  // the body before clicking Create — those edits land here and are now
+  // authoritative for the brief.
+  if (
+    (metadata.kind === 'image' || metadata.kind === 'video') &&
+    metadata.promptTemplate &&
+    typeof metadata.promptTemplate.prompt === 'string' &&
+    metadata.promptTemplate.prompt.trim().length > 0
+  ) {
+    const tpl = metadata.promptTemplate;
+    lines.push('');
+    lines.push(`### Reference prompt template — "${tpl.title ?? 'untitled'}"`);
+    const meta = [];
+    if (tpl.category) meta.push(`category: ${tpl.category}`);
+    if (tpl.model) meta.push(`suggested model: ${tpl.model}`);
+    if (tpl.aspect) meta.push(`aspect: ${tpl.aspect}`);
+    if (Array.isArray(tpl.tags) && tpl.tags.length > 0) {
+      meta.push(`tags: ${tpl.tags.join(', ')}`);
+    }
+    if (meta.length > 0) lines.push(meta.join(' · '));
+    if (tpl.summary) {
+      lines.push('');
+      lines.push(tpl.summary);
+    }
+    lines.push('');
+    lines.push(
+      'The user picked this template as inspiration. Treat it as a structural and stylistic reference: borrow composition, palette cues, lighting language, lens/motion direction, and the level of detail. Adapt the wording to the user\'s actual subject and brief — do NOT generate the template subject verbatim. If a field above is unknown the user wants you to follow the template\'s defaults.',
+    );
+    // Escape triple-backticks so a user who pastes ``` into the editable
+    // template body can't break out of the markdown fence below and inject
+    // free-form instructions into the agent's system prompt.
+    const safe = (tpl.prompt ?? '').replace(/```/g, '`\u200b`\u200b`');
+    const truncated =
+      safe.length > 4000
+        ? `${safe.slice(0, 4000)}\n… (truncated ${safe.length - 4000} chars)`
+        : safe;
+    lines.push('');
+    lines.push('```text');
+    lines.push(truncated);
+    lines.push('```');
+    if (tpl.source) {
+      const author = tpl.source.author ? ` by ${tpl.source.author}` : '';
+      lines.push('');
+      lines.push(
+        `Source: ${tpl.source.repo}${author} — license ${tpl.source.license ?? 'unspecified'}. Preserve attribution if you echo the template language directly.`,
+      );
+    }
   }
 
   if (metadata.kind === 'template' && template && template.files.length > 0) {

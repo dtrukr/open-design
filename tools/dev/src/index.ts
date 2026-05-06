@@ -302,12 +302,14 @@ async function runLoggedCommand(request: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   logFd: number;
+  windowsVerbatimArguments?: boolean;
 }): Promise<void> {
   const child = spawn(request.command, request.args, {
     cwd: request.cwd,
     env: request.env,
     stdio: ["ignore", request.logFd, request.logFd],
     windowsHide: process.platform === "win32",
+    windowsVerbatimArguments: request.windowsVerbatimArguments,
   });
 
   await new Promise<void>((resolveRun, rejectRun) => {
@@ -402,15 +404,18 @@ async function spawnSidecarRuntime(request: {
 
 async function spawnDaemonRuntime(config: ToolDevConfig, options: CliOptions): Promise<{ pid: number }> {
   const daemonPort = parsePortOption(options.daemonPort, "--daemon-port");
+  const webPort = parsePortOption(options.webPort, "--web-port");
   const logHandle = await openAppLog(config, APP_KEYS.DAEMON);
 
   try {
     await logHandle.write(`\n[tools-dev] launching daemon at ${new Date().toISOString()}\n`);
+    if (webPort != null) await logHandle.write(`[tools-dev] trusting web origin port ${webPort}\n`);
     return await spawnSidecarRuntime({
       appName: APP_KEYS.DAEMON,
       config,
       env: {
         [SIDECAR_ENV.DAEMON_PORT]: String(daemonPort ?? 0),
+        ...(webPort == null ? {} : { [SIDECAR_ENV.WEB_PORT]: String(webPort) }),
         ...(options.parentPid == null ? {} : { [TOOLS_DEV_PARENT_PID_ENV]: String(options.parentPid) }),
       },
       logHandle,
@@ -447,6 +452,9 @@ async function spawnWebRuntime(config: ToolDevConfig, options: CliOptions): Prom
         [SIDECAR_ENV.WEB_PORT]: String(webPort ?? 0),
         PORT: String(webPort ?? 0),
         ...(options.parentPid == null ? {} : { [TOOLS_DEV_PARENT_PID_ENV]: String(options.parentPid) }),
+        ...(options.prod === true
+          ? { NODE_ENV: "production", OD_WEB_OUTPUT_MODE: "server", OD_WEB_PROD: "1" }
+          : {}),
       },
       logHandle,
     });
@@ -464,6 +472,7 @@ async function buildDesktop(config: ToolDevConfig, logHandle: FileHandle): Promi
     cwd: config.workspaceRoot,
     env: process.env,
     logFd: logHandle.fd,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 }
 
@@ -476,7 +485,7 @@ async function ensureWebDevNodeModules(config: ToolDevConfig): Promise<void> {
   const current = await lstat(runtimeNodeModules).catch(() => null);
   if (current?.isSymbolicLink()) return;
   if (current != null) await rm(runtimeNodeModules, { force: true, recursive: true });
-  await symlink(webNodeModules, runtimeNodeModules, "dir");
+  await symlink(webNodeModules, runtimeNodeModules, "junction");
 }
 
 async function writeWebDevTsconfig(config: ToolDevConfig): Promise<void> {
@@ -484,7 +493,7 @@ async function writeWebDevTsconfig(config: ToolDevConfig): Promise<void> {
   const tsconfigPath = config.apps.web.nextTsconfigPath;
   const tsconfigDir = path.dirname(tsconfigPath);
   const sourceTsconfig = path.join(webRoot, "tsconfig.json");
-  const relativeSourceTsconfig = path.relative(tsconfigDir, sourceTsconfig) || "./tsconfig.json";
+  const relativeSourceTsconfig = (path.relative(tsconfigDir, sourceTsconfig) || "./tsconfig.json").replaceAll("\\", "/");
 
   await mkdir(tsconfigDir, { recursive: true });
   await writeFile(
@@ -506,16 +515,39 @@ async function spawnDesktopRuntime(config: ToolDevConfig, options: CliOptions): 
   try {
     await buildDesktop(config, logHandle);
     await logHandle.write(`[tools-dev] launching desktop at ${new Date().toISOString()}\n`);
+    const spawnEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      ...env,
+      ...(options.parentPid == null ? {} : { [TOOLS_DEV_PARENT_PID_ENV]: String(options.parentPid) }),
+    };
+    // ELECTRON_RUN_AS_NODE=1 makes Electron boot as plain Node and skip
+    // main-process API injection (app, BrowserWindow, protocol all become
+    // undefined). Strip it from the spawn env so desktop always boots in
+    // real Electron mode even when the parent shell is an Electron-based
+    // IDE that sets this variable for sidecar reuse.
+    //
+    // Iterate keys with a case-insensitive comparison rather than
+    // `delete spawnEnv.ELECTRON_RUN_AS_NODE`: spreading process.env into
+    // a plain object loses Node's Windows case-insensitive proxy, so any
+    // alternate-cased variant (e.g. `electron_run_as_node`) would still
+    // be passed to the child and Win32 CreateProcess would treat it as
+    // the same variable, undoing the fix.
+    //
+    // Scope is tools-dev only. The packaged runtime intentionally sets
+    // ELECTRON_RUN_AS_NODE on its own daemon/web sidecars (see
+    // apps/packaged/src/sidecars.ts) to reuse the bundled Node binary;
+    // that flow is independent and untouched here.
+    for (const key of Object.keys(spawnEnv)) {
+      if (key.toUpperCase() === "ELECTRON_RUN_AS_NODE") {
+        delete spawnEnv[key];
+      }
+    }
     const spawned = await spawnBackgroundProcess({
       args: [config.apps.desktop.mainEntryPath, ...stampArgs],
       command: config.apps.desktop.electronBinaryPath,
       cwd: config.workspaceRoot,
       detached: true,
-      env: {
-        ...process.env,
-        ...env,
-        ...(options.parentPid == null ? {} : { [TOOLS_DEV_PARENT_PID_ENV]: String(options.parentPid) }),
-      },
+      env: spawnEnv,
       logFd: logHandle.fd,
     });
     return { pid: spawned.pid };
@@ -876,7 +908,8 @@ function addSharedOptions(command: ReturnType<typeof cli.command>) {
 function addPortOptions(command: ReturnType<typeof cli.command>) {
   return command
     .option("--daemon-port <port>", "force daemon port; conflict quick-fails")
-    .option("--web-port <port>", "force web port; conflict quick-fails");
+    .option("--web-port <port>", "force web port; conflict quick-fails")
+    .option("--prod", "use production build (requires pnpm --filter @open-design/web build first)");
 }
 
 addPortOptions(addSharedOptions(cli.command("start [app]", "Start daemon, web, desktop, or all when app is omitted"))).action(

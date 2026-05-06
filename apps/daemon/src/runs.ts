@@ -32,7 +32,6 @@ export function createChatRunService({
       exitCode: null,
       signal: null,
       cancelRequested: false,
-      promptFileCleaned: null,
     };
     runs.set(run.id, run);
     return run;
@@ -75,7 +74,6 @@ export function createChatRunService({
     run.exitCode = code;
     run.signal = signal;
     run.updatedAt = Date.now();
-    run.promptFileCleaned?.();
     emit(run, 'end', { code, signal, status });
     for (const sse of run.clients) sse.end();
     run.clients.clear();
@@ -127,8 +125,21 @@ export function createChatRunService({
     if (!TERMINAL_RUN_STATUSES.has(run.status)) {
       run.cancelRequested = true;
       run.updatedAt = Date.now();
-      if (run.child && !run.child.killed) run.child.kill('SIGTERM');
-      else finish(run, 'canceled', null, 'SIGTERM');
+      // Prefer RPC-level abort for agents that support it (pi, ACP adapters).
+      // abort() sends the graceful shutdown signal; cancel() owns the
+      // SIGTERM fallback so that a misbehaving session can't leave the
+      // child alive indefinitely.
+      if (run.acpSession?.abort) {
+        run.acpSession.abort();
+        const graceMs = Number(process.env.PI_ABORT_GRACE_MS) || 3000;
+        setTimeout(() => {
+          if (run.child && !run.child.killed) run.child.kill('SIGTERM');
+        }, graceMs).unref();
+      } else if (run.child && !run.child.killed) {
+        run.child.kill('SIGTERM');
+      } else {
+        finish(run, 'canceled', null, 'SIGTERM');
+      }
     }
   };
 
