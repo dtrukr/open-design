@@ -1052,12 +1052,16 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   // Shared by the global origin middleware and isLocalSameOrigin() so
   // both use the same policy (loopback + explicit bind host, HTTP + HTTPS,
   // OD_WEB_PORT support).
-  function buildAllowedOrigins() {
+  function buildAllowedOrigins(requestHost = '') {
     const ports = [resolvedPort];
     const webPort = Number(process.env.OD_WEB_PORT);
     if (webPort && webPort !== resolvedPort) ports.push(webPort);
     const schemes = ['http', 'https'];
     const loopbackHosts = ['127.0.0.1', 'localhost', '[::1]'];
+    const requestOriginHost =
+      isWildcardBindHost(host) && isLiteralIpHost(requestHost)
+        ? requestHost
+        : null;
     return new Set(
       ports.flatMap((p) => [
         ...schemes.flatMap((s) => loopbackHosts.map((h) => `${s}://${h}:${p}`)),
@@ -1065,6 +1069,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
         // LAN IP, or 0.0.0.0), allow browser requests from that address
         // too so the documented --host escape hatch remains usable.
         ...schemes.map((s) => `${s}://${host}:${p}`),
+        ...(requestOriginHost ? schemes.map((s) => `${s}://${requestOriginHost}`) : []),
       ]),
     );
   }
@@ -1103,7 +1108,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       return res.status(403).json({ error: 'Server initializing' });
     }
 
-    if (!buildAllowedOrigins().has(String(origin))) {
+    if (!buildAllowedOrigins(String(req.headers.host || '')).has(String(origin))) {
       return res.status(403).json({ error: 'Cross-origin requests are not allowed' });
     }
     next();
@@ -4623,10 +4628,13 @@ export function isLocalSameOrigin(req, port) {
   if (webPort && webPort !== port) ports.push(webPort);
   const bindHost = process.env.OD_BIND_HOST || process.env.OD_HOST || '127.0.0.1';
   const loopbackHosts = ['127.0.0.1', 'localhost', '[::1]'];
+  const requestOriginHost =
+    isWildcardBindHost(bindHost) && isLiteralIpHost(host) ? host : null;
   const allowedHosts = new Set(
     ports.flatMap((p) => [
       ...loopbackHosts.map((h) => `${h}:${p}`),
       `${bindHost}:${p}`,
+      ...(requestOriginHost ? [requestOriginHost] : []),
     ]),
   );
 
@@ -4641,7 +4649,18 @@ export function isLocalSameOrigin(req, port) {
     ports.flatMap((p) => [
       ...schemes.flatMap((s) => loopbackHosts.map((h) => `${s}://${h}:${p}`)),
       ...schemes.map((s) => `${s}://${bindHost}:${p}`),
+      ...(requestOriginHost ? schemes.map((s) => `${s}://${requestOriginHost}`) : []),
     ]),
   );
   return allowedOrigins.has(String(origin));
+}
+
+function isWildcardBindHost(host) {
+  return host === '0.0.0.0' || host === '::' || host === '[::]';
+}
+
+function isLiteralIpHost(hostHeader) {
+  const host = String(hostHeader || '');
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(host)) return true;
+  return /^\[[0-9a-fA-F:]+\]:\d+$/.test(host);
 }
