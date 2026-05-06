@@ -808,9 +808,8 @@ export async function uploadProjectFile(
 }
 
 // Multi-file project upload used by the chat composer's paste / drop /
-// picker. Each file lands flat in the project folder; the response is
-// reshaped into ChatAttachments so the composer can stage them without a
-// follow-up listFiles round-trip.
+// picker. Folder uploads include browser-provided relative paths so the
+// daemon can preserve subdirectories.
 const PROJECT_UPLOAD_BATCH_SIZE = 12;
 
 export interface ProjectUploadFailure {
@@ -823,6 +822,15 @@ export interface UploadProjectFilesResult {
   uploaded: ChatAttachment[];
   failed: ProjectUploadFailure[];
   error?: string;
+}
+
+type FileWithUploadPath = File & { uploadRelativePath?: string };
+
+function projectUploadPath(file: File): string {
+  const explicit = (file as FileWithUploadPath).uploadRelativePath;
+  if (typeof explicit === 'string' && explicit.trim()) return explicit;
+  const webkit = (file as File & { webkitRelativePath?: string }).webkitRelativePath;
+  return typeof webkit === 'string' && webkit.trim() ? webkit : '';
 }
 
 export async function uploadProjectFiles(
@@ -839,7 +847,10 @@ export async function uploadProjectFiles(
     const batch = files.slice(i, i + PROJECT_UPLOAD_BATCH_SIZE);
     const remaining = files.slice(i + PROJECT_UPLOAD_BATCH_SIZE);
     const form = new FormData();
-    for (const f of batch) form.append('files', f);
+    for (const f of batch) {
+      form.append('paths', projectUploadPath(f));
+      form.append('files', f);
+    }
 
     try {
       const resp = await fetch(

@@ -3,6 +3,7 @@ import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
 import { projectFileUrl } from '../providers/registry';
 import type { LiveArtifactWorkspaceEntry, ProjectFile, ProjectFileKind } from '../types';
+import { filesFromDataTransfer } from '../utils/uploadPaths';
 import { Icon } from './Icon';
 import { LiveArtifactBadges } from './LiveArtifactBadges';
 
@@ -17,6 +18,7 @@ interface Props {
   onOpenLiveArtifact: (tabId: LiveArtifactWorkspaceEntry['tabId']) => void;
   onDeleteFile: (name: string) => void;
   onUpload: () => void;
+  onUploadFolder: () => void;
   onUploadFiles: (files: File[]) => void;
   onPaste: () => void;
   onNewSketch: () => void;
@@ -51,6 +53,7 @@ export function DesignFilesPanel({
   onOpenLiveArtifact,
   onDeleteFile,
   onUpload,
+  onUploadFolder,
   onUploadFiles,
   onPaste,
   onNewSketch,
@@ -197,11 +200,11 @@ export function DesignFilesPanel({
     }
   }
 
-  function handleDrop(ev: React.DragEvent<HTMLDivElement>) {
+  async function handleDrop(ev: React.DragEvent<HTMLDivElement>) {
     ev.preventDefault();
     dragDepthRef.current = 0;
     setDraggingFiles(false);
-    const dropped = Array.from(ev.dataTransfer.files ?? []);
+    const dropped = await filesFromDataTransfer(ev.dataTransfer);
     if (dropped.length > 0) onUploadFiles(dropped);
   }
 
@@ -254,6 +257,15 @@ export function DesignFilesPanel({
             >
               <Icon name="upload" size={13} />
               <span>{t('designFiles.upload.label')}</span>
+            </button>
+            <button
+              type="button"
+              data-testid="design-files-upload-folder-trigger"
+              onClick={onUploadFolder}
+              title="Upload folder"
+            >
+              <Icon name="folder" size={13} />
+              <span>Folder</span>
             </button>
           </div>
           )}

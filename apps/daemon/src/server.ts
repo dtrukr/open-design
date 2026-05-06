@@ -64,12 +64,14 @@ import {
   decodeMultipartFilename,
   deleteProjectFile,
   ensureProject,
+  kindFor,
   listFiles,
   mimeFor,
   projectDir,
   readProjectFile,
   removeProjectDir,
   sanitizeName,
+  sanitizePath,
   searchProjectFiles,
   writeProjectFile,
 } from './projects.js';
@@ -866,33 +868,59 @@ const importUpload = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
 });
 
-// Project-scoped multi-file upload. Lands files directly in the project
-// folder (flat — same shape FileWorkspace expects), so the composer's
-// pasted/dropped/picked images become referenceable filenames the agent
-// can Read or @-mention without any cross-folder gymnastics.
+// Project-scoped multi-file upload. Files land in a temp folder first, then
+// the route moves them into validated project-relative paths. That preserves
+// folder uploads without trusting raw multipart names as filesystem paths.
 const projectUpload = multer({
   storage: multer.diskStorage({
-    destination: async (req, _file, cb) => {
-      try {
-        const dir = await ensureProject(PROJECTS_DIR, req.params.id);
-        cb(null, dir);
-      } catch (err) {
-        cb(err, '');
-      }
-    },
+    destination: UPLOAD_DIR,
     filename: (_req, file, cb) => {
       // multer@1 hands us latin1-decoded multipart filenames; restore the
-      // original UTF-8 so the response (and the on-disk name) preserves
-      // non-ASCII characters instead of mangling them. Then run the
-      // shared sanitiser and prepend a base36 timestamp so multiple
-      // uploads with the same original name don't clobber each other.
+      // original UTF-8 so the response preserves non-ASCII characters instead
+      // of mangling them.
       file.originalname = decodeMultipartFilename(file.originalname);
       const safe = sanitizeName(file.originalname);
-      cb(null, `${Date.now().toString(36)}-${safe}`);
+      cb(
+        null,
+        `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safe}`,
+      );
     },
   }),
   limits: { fileSize: 200 * 1024 * 1024 },  // 200MB — covers the largest design assets we expect (PPTX/PDF/raw images)
 });
+
+function normalizeUploadPathsField(raw) {
+  if (Array.isArray(raw)) return raw.map((v) => String(v ?? ''));
+  if (typeof raw === 'string') return [raw];
+  return [];
+}
+
+function uploadTargetPath(file, paths, index) {
+  const candidate = paths[index];
+  if (typeof candidate === 'string' && candidate.trim()) {
+    return sanitizePath(candidate);
+  }
+  return `${Date.now().toString(36)}-${sanitizeName(file.originalname)}`;
+}
+
+async function moveUploadedFileToProject(file, projectRoot, relPath) {
+  const target = path.resolve(projectRoot, relPath);
+  if (!target.startsWith(projectRoot + path.sep) && target !== projectRoot) {
+    throw new Error('path escapes project dir');
+  }
+  await fs.promises.mkdir(path.dirname(target), { recursive: true });
+  await fs.promises.rename(file.path, target);
+  const st = await fs.promises.stat(target);
+  return {
+    name: relPath,
+    path: relPath,
+    type: 'file',
+    size: st.size,
+    mtime: st.mtimeMs,
+    kind: kindFor(relPath),
+    mime: mimeFor(relPath),
+  };
+}
 
 function handleProjectUpload(req, res, next) {
   projectUpload.array('files', 12)(req, res, (err) => {
@@ -3207,29 +3235,27 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     res.json({ tasks });
   });
 
-  // Multi-file upload that the chat composer uses for paste/drop/picker.
-  // Files land flat in the project folder; the response carries the same
-  // metadata as listFiles so the client can stage them as ChatAttachments
-  // without a separate refetch.
+  // Multi-file upload that the chat composer and Design Files panel use for
+  // paste/drop/picker. Folder picker uploads include one `paths` field per
+  // file so the response and disk layout keep project-relative subdirectories.
   app.post(
     '/api/projects/:id/upload',
     handleProjectUpload,
     async (req, res) => {
       try {
         const incoming = Array.isArray(req.files) ? req.files : [];
+        const uploadPaths = normalizeUploadPathsField(req.body?.paths);
+        const projectRoot = await ensureProject(PROJECTS_DIR, req.params.id);
         const out = [];
-        for (const f of incoming) {
+        for (let index = 0; index < incoming.length; index += 1) {
+          const f = incoming[index];
           try {
-            const stat = await fs.promises.stat(f.path);
-            out.push({
-              name: f.filename,
-              path: f.filename,
-              size: stat.size,
-              mtime: stat.mtimeMs,
-              originalName: f.originalname,
-            });
+            const relPath = uploadTargetPath(f, uploadPaths, index);
+            const file = await moveUploadedFileToProject(f, projectRoot, relPath);
+            out.push({ ...file, originalName: f.originalname });
           } catch {
-            // skip files that vanished mid-flight
+            if (f?.path) fs.promises.unlink(f.path).catch(() => {});
+            // skip files that vanished mid-flight or had invalid paths
           }
         }
         /** @type {import('@open-design/contracts').UploadProjectFilesResponse} */

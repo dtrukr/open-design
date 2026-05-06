@@ -11,6 +11,7 @@ import type { Dict } from '../i18n/types';
 import { projectRawUrl, uploadProjectFiles, openFolderDialog } from "../providers/registry";
 import { patchProject } from "../state/projects";
 import type { AppConfig, ChatAttachment, ChatCommentAttachment, ProjectFile, ProjectMetadata } from "../types";
+import { filesFromDataTransfer } from '../utils/uploadPaths';
 import { Icon } from "./Icon";
 import { BUILT_IN_PETS, CUSTOM_PET_ID, resolveActivePet } from "./pet/pets";
 
@@ -393,10 +394,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       }
     }
 
-    function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
       e.preventDefault();
       setDragActive(false);
-      const files = Array.from(e.dataTransfer.files ?? []);
+      const files = await filesFromDataTransfer(e.dataTransfer);
       if (files.length > 0) void uploadFiles(files);
     }
 

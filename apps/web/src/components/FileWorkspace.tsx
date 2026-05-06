@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react';
 import { useT } from '../i18n';
 import {
   deleteProjectFile,
@@ -56,6 +56,10 @@ interface SketchState {
 }
 
 const DESIGN_FILES_TAB = '__design_files__';
+const DIRECTORY_PICKER_PROPS = {
+  webkitdirectory: '',
+  directory: '',
+} as InputHTMLAttributes<HTMLInputElement>;
 
 export function FileWorkspace({
   projectId,
@@ -89,6 +93,7 @@ export function FileWorkspace({
   const [sketches, setSketches] = useState<Record<string, SketchState>>({});
   const [quickSwitcherOpen, setQuickSwitcherOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
   const tabsBarRef = useRef<HTMLDivElement | null>(null);
 
   const visibleFiles = useMemo(
@@ -183,6 +188,12 @@ export function FileWorkspace({
   }
 
   async function handleFilePicked(ev: React.ChangeEvent<HTMLInputElement>) {
+    const picked = Array.from(ev.target.files ?? []);
+    ev.target.value = '';
+    await uploadFiles(picked);
+  }
+
+  async function handleFolderPicked(ev: React.ChangeEvent<HTMLInputElement>) {
     const picked = Array.from(ev.target.files ?? []);
     ev.target.value = '';
     await uploadFiles(picked);
@@ -484,6 +495,7 @@ export function FileWorkspace({
             onOpenLiveArtifact={(tabId) => openFile(tabId)}
             onDeleteFile={(name) => void handleDelete(name)}
             onUpload={() => fileInputRef.current?.click()}
+            onUploadFolder={() => folderInputRef.current?.click()}
             onUploadFiles={(picked) => void uploadFiles(picked)}
             onPaste={() => setShowPasteDialog(true)}
             onNewSketch={startNewSketch}
@@ -546,6 +558,15 @@ export function FileWorkspace({
         data-testid="design-files-upload-input"
         style={{ display: 'none' }}
         onChange={handleFilePicked}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        data-testid="design-files-upload-folder-input"
+        style={{ display: 'none' }}
+        onChange={handleFolderPicked}
+        {...DIRECTORY_PICKER_PROPS}
       />
       {showPasteDialog ? (
         <PasteTextDialog
