@@ -67,6 +67,7 @@ import { agentCliEnvForAgent, readAppConfig, writeAppConfig } from './app-config
 import {
   buildProjectArchive,
   buildBatchArchive,
+  collectProjectAssetEntries,
   decodeMultipartFilename,
   deleteProjectFile,
   ensureProject,
@@ -81,6 +82,11 @@ import {
   searchProjectFiles,
   writeProjectFile,
 } from './projects.js';
+import {
+  listShareTargetProjects,
+  resolveShareTargetProject,
+} from './project-registry.js';
+import { uploadDesignAssetsToProject } from './share-upload.js';
 import { validateArtifactManifestInput } from './artifact-manifest.js';
 import { readCurrentAppVersionInfo } from './app-version.js';
 import {
@@ -3098,6 +3104,55 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     } catch (err) {
       const code = err && err.code;
       const status = code === 'ENOENT' ? 404 : 400;
+      sendApiError(
+        res,
+        status,
+        status === 404 ? 'FILE_NOT_FOUND' : 'BAD_REQUEST',
+        String(err?.message || err),
+      );
+    }
+  });
+
+  app.get('/api/share-target-projects', async (_req, res) => {
+    try {
+      /** @type {import('@open-design/contracts').ShareTargetProjectsResponse} */
+      const body = { projects: await listShareTargetProjects() };
+      res.json(body);
+    } catch (err) {
+      sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
+    }
+  });
+
+  app.post('/api/projects/:id/share-assets', async (req, res) => {
+    try {
+      const { targetProjectName, root = '' } = req.body || {};
+      if (typeof targetProjectName !== 'string' || !targetProjectName.trim()) {
+        sendApiError(res, 400, 'BAD_REQUEST', 'targetProjectName required');
+        return;
+      }
+      if (typeof root !== 'string') {
+        sendApiError(res, 400, 'BAD_REQUEST', 'root must be a string');
+        return;
+      }
+      const targetProject = await resolveShareTargetProject(targetProjectName);
+      const assetSet = await collectProjectAssetEntries(PROJECTS_DIR, req.params.id, root);
+      const result = await uploadDesignAssetsToProject({
+        targetProject,
+        sourceRoot: assetSet.root,
+        entries: assetSet.entries,
+      });
+      /** @type {import('@open-design/contracts').ShareProjectAssetsResponse} */
+      const body = {
+        targetProject,
+        directoryName: result.directoryName,
+        destinationPath: result.destinationPath,
+        fileCount: result.fileCount,
+        uploadedAt: result.uploadedAt,
+      };
+      res.json(body);
+    } catch (err) {
+      const code = err && err.code;
+      const status = code === 'ENOENT' || code === 'ENOTDIR' ? 404 : 400;
       sendApiError(
         res,
         status,

@@ -792,6 +792,19 @@ export const fa: Dict = {
   'qf.cardRefs': 'مراجع:',
   'qf.cardSampleText': 'روباه قهوه‌ای سریع · ۰۱۲۳',
 
+  'fileViewer.shareProject': 'Upload to project…',
+  'fileViewer.shareProjectModalTitle': 'Upload to project',
+  'fileViewer.shareProjectModalSubtitle':
+    'Copy this design asset tree into a new design directory in a registered project.',
+  'fileViewer.shareProjectTarget': 'Project',
+  'fileViewer.shareProjectLoading': 'Loading projects…',
+  'fileViewer.shareProjectNoTargets': 'No registered projects were found.',
+  'fileViewer.shareProjectUpload': 'Upload files',
+  'fileViewer.shareProjectUploading': 'Uploading…',
+  'fileViewer.shareProjectUploaded': 'Upload complete',
+  'fileViewer.shareProjectUploadedSummary':
+    'Uploaded {count} files to {project}/{dir}.',
+  'fileViewer.shareProjectFailed': 'Upload failed.',
   'fileViewer.deployToVercel': 'Deploy to Vercel',
   'fileViewer.redeployToVercel': 'Redeploy',
   'fileViewer.deployingToVercel': 'Deploying to Vercel…',

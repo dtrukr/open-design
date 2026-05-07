@@ -13,11 +13,13 @@ import {
   fetchProjectDeployments,
   fetchProjectFilePreview,
   fetchProjectFileText,
+  fetchShareTargetProjects,
   liveArtifactPreviewUrl,
   projectFileUrl,
   projectRawUrl,
   LiveArtifactRefreshError,
   refreshLiveArtifact,
+  shareProjectAssets,
   updateDeployConfig,
   writeProjectTextFile,
 } from '../providers/registry';
@@ -31,6 +33,7 @@ import {
   exportReactComponentAsHtml,
   exportReactComponentAsZip,
   openSandboxedPreviewInNewTab,
+  archiveRootFromFilePath,
 } from '../runtime/exports';
 import { buildReactComponentSrcdoc } from '../runtime/react-component';
 import { buildSrcdoc } from '../runtime/srcdoc';
@@ -45,6 +48,8 @@ import type {
   LiveArtifactViewerTab,
   LiveArtifactWorkspaceEntry,
   ProjectFile,
+  ShareProjectAssetsResponse,
+  ShareTargetProject,
 } from '../types';
 import { Icon } from './Icon';
 import {
@@ -2057,6 +2062,13 @@ function HtmlViewer({
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deployResult, setDeployResult] = useState<DeployProjectFileResponse | null>(null);
   const [copiedDeployLink, setCopiedDeployLink] = useState(false);
+  const [shareProjectModalOpen, setShareProjectModalOpen] = useState(false);
+  const [shareTargetProjects, setShareTargetProjects] = useState<ShareTargetProject[]>([]);
+  const [shareTargetProjectName, setShareTargetProjectName] = useState('');
+  const [shareProjectLoading, setShareProjectLoading] = useState(false);
+  const [shareProjectUploading, setShareProjectUploading] = useState(false);
+  const [shareProjectError, setShareProjectError] = useState<string | null>(null);
+  const [shareProjectResult, setShareProjectResult] = useState<ShareProjectAssetsResponse | null>(null);
   const [vercelToken, setVercelToken] = useState('');
   const [teamId, setTeamId] = useState('');
   const [teamSlug, setTeamSlug] = useState('');
@@ -2651,6 +2663,48 @@ function HtmlViewer({
     }
   }
 
+  async function openShareProjectModal() {
+    setShareMenuOpen(false);
+    setShareProjectModalOpen(true);
+    setShareProjectError(null);
+    setShareProjectResult(null);
+    setShareProjectLoading(true);
+    try {
+      const projects = await fetchShareTargetProjects();
+      setShareTargetProjects(projects);
+      setShareTargetProjectName((current) => {
+        if (current && projects.some((project) => project.name === current)) return current;
+        return projects[0]?.name ?? '';
+      });
+      if (projects.length === 0) {
+        setShareProjectError(t('fileViewer.shareProjectNoTargets'));
+      }
+    } finally {
+      setShareProjectLoading(false);
+    }
+  }
+
+  async function uploadToShareProject() {
+    if (!shareTargetProjectName) return;
+    setShareProjectUploading(true);
+    setShareProjectError(null);
+    setShareProjectResult(null);
+    try {
+      const result = await shareProjectAssets({
+        projectId,
+        targetProjectName: shareTargetProjectName,
+        root: archiveRootFromFilePath(file.name),
+      });
+      setShareProjectResult(result);
+    } catch (err) {
+      setShareProjectError(
+        err instanceof Error ? err.message : t('fileViewer.shareProjectFailed'),
+      );
+    } finally {
+      setShareProjectUploading(false);
+    }
+  }
+
   async function openDeployModal() {
     setShareMenuOpen(false);
     setDeployModalOpen(true);
@@ -3171,6 +3225,22 @@ function HtmlViewer({
                     type="button"
                     className="share-menu-item"
                     role="menuitem"
+                    disabled={shareProjectUploading}
+                    onClick={() => {
+                      void openShareProjectModal();
+                    }}
+                  >
+                    <span className="share-menu-icon"><Icon name="upload" size={14} /></span>
+                    <span>
+                      {shareProjectUploading
+                        ? t('fileViewer.shareProjectUploading')
+                        : t('fileViewer.shareProject')}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="share-menu-item"
+                    role="menuitem"
                     onClick={() => {
                       void openDeployModal();
                     }}
@@ -3340,6 +3410,77 @@ function HtmlViewer({
               srcDoc={srcDoc}
             />
           )}
+        </div>
+      ) : null}
+      {shareProjectModalOpen ? (
+        <div className="modal-backdrop" role="presentation">
+          <div className="modal share-project-modal" role="dialog" aria-modal="true">
+            <div className="modal-head">
+              <div className="kicker">PROJECTS</div>
+              <h2>{t('fileViewer.shareProjectModalTitle')}</h2>
+              <p className="subtitle">{t('fileViewer.shareProjectModalSubtitle')}</p>
+            </div>
+            <div className="share-project-form">
+              <label>
+                <span>{t('fileViewer.shareProjectTarget')}</span>
+                <select
+                  value={shareTargetProjectName}
+                  disabled={shareProjectLoading || shareProjectUploading}
+                  onChange={(event) => setShareTargetProjectName(event.target.value)}
+                >
+                  {shareTargetProjects.map((project) => (
+                    <option key={project.name} value={project.name}>
+                      {project.name}
+                      {project.machine ? ` (${project.machine})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {shareProjectLoading ? (
+                <p className="hint">{t('fileViewer.shareProjectLoading')}</p>
+              ) : null}
+              {shareProjectError ? <p className="deploy-error">{shareProjectError}</p> : null}
+              {shareProjectResult ? (
+                <div className="deploy-result ready">
+                  <div className="deploy-result-label">{t('fileViewer.shareProjectUploaded')}</div>
+                  <p className="deploy-result-message">
+                    {t('fileViewer.shareProjectUploadedSummary', {
+                      count: shareProjectResult.fileCount,
+                      project: shareProjectResult.targetProject.name,
+                      dir: shareProjectResult.directoryName,
+                    })}
+                  </p>
+                  <code>{shareProjectResult.destinationPath}</code>
+                </div>
+              ) : null}
+            </div>
+            <div className="modal-foot">
+              <button
+                type="button"
+                className="ghost-link button-like"
+                onClick={() => setShareProjectModalOpen(false)}
+              >
+                {t('common.close')}
+              </button>
+              <button
+                type="button"
+                className="viewer-action primary"
+                disabled={
+                  shareProjectLoading ||
+                  shareProjectUploading ||
+                  !shareTargetProjectName ||
+                  shareTargetProjects.length === 0
+                }
+                onClick={() => {
+                  void uploadToShareProject();
+                }}
+              >
+                {shareProjectUploading
+                  ? t('fileViewer.shareProjectUploading')
+                  : t('fileViewer.shareProjectUpload')}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
       {deployModalOpen ? (

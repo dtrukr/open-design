@@ -213,6 +213,32 @@ export interface DeployProjectFileResponse extends DeploymentInfo {}
 
 export interface CheckDeploymentLinkResponse extends DeploymentInfo {}
 
+export interface ShareTargetProject {
+  name: string;
+  machine?: string;
+  path: string;
+  ssh?: string;
+  sessionPrefix?: string;
+  aliases?: string[];
+}
+
+export interface ShareTargetProjectsResponse {
+  projects: ShareTargetProject[];
+}
+
+export interface ShareProjectAssetsRequest {
+  targetProjectName: string;
+  root?: string;
+}
+
+export interface ShareProjectAssetsResponse {
+  targetProject: ShareTargetProject;
+  directoryName: string;
+  destinationPath: string;
+  fileCount: number;
+  uploadedAt: number;
+}
+
 // Preflight inspects the file set that would be uploaded for a deploy
 // without sending anything to the provider. Lets the UI show file count,
 // total size, and warnings before the user pays the network round-trip.

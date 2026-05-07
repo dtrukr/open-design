@@ -6864,11 +6864,41 @@ button.connector-action.is-loading {
   max-height: calc(100vh - 32px);
   overflow: auto;
 }
+.share-project-modal {
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
 .deploy-form {
   display: flex;
   flex-direction: column;
   gap: 14px;
   margin-top: 18px;
+}
+.share-project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 18px;
+}
+.share-project-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.share-project-form select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0 12px;
+  background: var(--bg-panel);
+  color: var(--text);
+  font: inherit;
+}
+.share-project-form code {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 .field-label-row {
   display: flex;

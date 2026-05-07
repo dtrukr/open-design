@@ -668,6 +668,19 @@ export const ar: Dict = {
   'fileViewer.templateNameDefault': 'قالب بدون عنوان',
   'fileViewer.templateDescPrompt':
     'وصف قصير (اختياري - ما الذي يجعل هذا القالب مفيداً؟)',
+  'fileViewer.shareProject': 'Upload to project…',
+  'fileViewer.shareProjectModalTitle': 'Upload to project',
+  'fileViewer.shareProjectModalSubtitle':
+    'Copy this design asset tree into a new design directory in a registered project.',
+  'fileViewer.shareProjectTarget': 'Project',
+  'fileViewer.shareProjectLoading': 'Loading projects…',
+  'fileViewer.shareProjectNoTargets': 'No registered projects were found.',
+  'fileViewer.shareProjectUpload': 'Upload files',
+  'fileViewer.shareProjectUploading': 'Uploading…',
+  'fileViewer.shareProjectUploaded': 'Upload complete',
+  'fileViewer.shareProjectUploadedSummary':
+    'Uploaded {count} files to {project}/{dir}.',
+  'fileViewer.shareProjectFailed': 'Upload failed.',
   'fileViewer.deployToVercel': 'نشر على Vercel',
   'fileViewer.redeployToVercel': 'إعادة النشر',
   'fileViewer.deployingToVercel': 'جاري النشر على Vercel...',

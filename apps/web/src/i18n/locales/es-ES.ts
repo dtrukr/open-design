@@ -625,6 +625,19 @@ export const esES: Dict = {
   'fileViewer.templateNameDefault': 'Plantilla sin título',
   'fileViewer.templateDescPrompt':
     'Descripción breve (opcional: ¿qué hace útil esta plantilla?)',
+  'fileViewer.shareProject': 'Upload to project…',
+  'fileViewer.shareProjectModalTitle': 'Upload to project',
+  'fileViewer.shareProjectModalSubtitle':
+    'Copy this design asset tree into a new design directory in a registered project.',
+  'fileViewer.shareProjectTarget': 'Project',
+  'fileViewer.shareProjectLoading': 'Loading projects…',
+  'fileViewer.shareProjectNoTargets': 'No registered projects were found.',
+  'fileViewer.shareProjectUpload': 'Upload files',
+  'fileViewer.shareProjectUploading': 'Uploading…',
+  'fileViewer.shareProjectUploaded': 'Upload complete',
+  'fileViewer.shareProjectUploadedSummary':
+    'Uploaded {count} files to {project}/{dir}.',
+  'fileViewer.shareProjectFailed': 'Upload failed.',
   'fileViewer.deployToVercel': 'Desplegar en Vercel',
   'fileViewer.redeployToVercel': 'Volver a desplegar',
   'fileViewer.deployingToVercel': 'Desplegando en Vercel…',

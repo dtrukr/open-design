@@ -623,6 +623,19 @@ export const ja: Dict = {
   'fileViewer.templateNameDefault': '無題のテンプレート',
   'fileViewer.templateDescPrompt':
     '短い説明（省略可 — このテンプレートの使いどころは？）',
+  'fileViewer.shareProject': 'Upload to project…',
+  'fileViewer.shareProjectModalTitle': 'Upload to project',
+  'fileViewer.shareProjectModalSubtitle':
+    'Copy this design asset tree into a new design directory in a registered project.',
+  'fileViewer.shareProjectTarget': 'Project',
+  'fileViewer.shareProjectLoading': 'Loading projects…',
+  'fileViewer.shareProjectNoTargets': 'No registered projects were found.',
+  'fileViewer.shareProjectUpload': 'Upload files',
+  'fileViewer.shareProjectUploading': 'Uploading…',
+  'fileViewer.shareProjectUploaded': 'Upload complete',
+  'fileViewer.shareProjectUploadedSummary':
+    'Uploaded {count} files to {project}/{dir}.',
+  'fileViewer.shareProjectFailed': 'Upload failed.',
   'fileViewer.deployToVercel': 'Vercel にデプロイ',
   'fileViewer.redeployToVercel': '再デプロイ',
   'fileViewer.deployingToVercel': 'Vercel にデプロイ中…',

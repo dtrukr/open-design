@@ -84,42 +84,7 @@ async function collectFiles(dir, relDir, out) {
 // menu item, which exports the user's actual project tree (e.g. the
 // uploaded `ui-design/` folder), not just the rendered HTML.
 export async function buildProjectArchive(projectsRoot, projectId, root) {
-  const projectRoot = projectDir(projectsRoot, projectId);
-  let archiveRoot = projectRoot;
-  let archiveBaseName = '';
-  if (typeof root === 'string' && root.trim().length > 0) {
-    archiveRoot = resolveSafe(projectRoot, root);
-    archiveBaseName = path.basename(archiveRoot);
-  }
-
-  // Stat the archive root up-front so a missing/non-directory target gives a
-  // clear ENOENT/ENOTDIR error. Without this the recursive walk swallows
-  // ENOENT and we'd report the directory as "empty" instead — confusing if
-  // the project (or a subdir) was deleted concurrently with the download.
-  let rootStat;
-  try {
-    rootStat = await stat(archiveRoot);
-  } catch (err) {
-    if (err && err.code === 'ENOENT') {
-      const e = new Error('archive root does not exist');
-      e.code = 'ENOENT';
-      throw e;
-    }
-    throw err;
-  }
-  if (!rootStat.isDirectory()) {
-    const err = new Error('archive root is not a directory');
-    err.code = 'ENOTDIR';
-    throw err;
-  }
-
-  const entries = [];
-  await collectArchiveEntries(archiveRoot, '', entries);
-  if (entries.length === 0) {
-    const err = new Error('archive root is empty');
-    err.code = 'ENOENT';
-    throw err;
-  }
+  const { entries, baseName: archiveBaseName } = await collectProjectAssetEntries(projectsRoot, projectId, root);
 
   const zip = new JSZip();
   for (const entry of entries) {
@@ -139,6 +104,46 @@ export async function buildProjectArchive(projectsRoot, projectId, root) {
     compressionOptions: { level: 6 },
   });
   return { buffer, baseName: archiveBaseName };
+}
+
+export async function collectProjectAssetEntries(projectsRoot, projectId, root) {
+  const projectRoot = projectDir(projectsRoot, projectId);
+  let assetRoot = projectRoot;
+  let assetBaseName = '';
+  if (typeof root === 'string' && root.trim().length > 0) {
+    assetRoot = resolveSafe(projectRoot, root);
+    assetBaseName = path.basename(assetRoot);
+  }
+
+  // Stat the asset root up-front so a missing/non-directory target gives a
+  // clear ENOENT/ENOTDIR error. Without this the recursive walk swallows
+  // ENOENT and we'd report the directory as "empty" instead.
+  let rootStat;
+  try {
+    rootStat = await stat(assetRoot);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      const e = new Error('asset root does not exist');
+      e.code = 'ENOENT';
+      throw e;
+    }
+    throw err;
+  }
+  if (!rootStat.isDirectory()) {
+    const err = new Error('asset root is not a directory');
+    err.code = 'ENOTDIR';
+    throw err;
+  }
+
+  const entries = [];
+  await collectArchiveEntries(assetRoot, '', entries);
+  if (entries.length === 0) {
+    const err = new Error('asset root is empty');
+    err.code = 'ENOENT';
+    throw err;
+  }
+
+  return { entries, baseName: assetBaseName, root: assetRoot };
 }
 
 export async function buildBatchArchive(projectsRoot, projectId, fileNames) {

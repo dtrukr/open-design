@@ -737,6 +737,17 @@ export interface Dict {
   'fileViewer.templateNamePrompt': string;
   'fileViewer.templateNameDefault': string;
   'fileViewer.templateDescPrompt': string;
+  'fileViewer.shareProject': string;
+  'fileViewer.shareProjectModalTitle': string;
+  'fileViewer.shareProjectModalSubtitle': string;
+  'fileViewer.shareProjectTarget': string;
+  'fileViewer.shareProjectLoading': string;
+  'fileViewer.shareProjectNoTargets': string;
+  'fileViewer.shareProjectUpload': string;
+  'fileViewer.shareProjectUploading': string;
+  'fileViewer.shareProjectUploaded': string;
+  'fileViewer.shareProjectUploadedSummary': string;
+  'fileViewer.shareProjectFailed': string;
   'liveArtifact.refresh.button': string;
   'liveArtifact.refresh.buttonTitle': string;
   'liveArtifact.refresh.loadingTitle': string;

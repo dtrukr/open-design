@@ -29,6 +29,9 @@ import type {
   PromptTemplateDetail,
   PromptTemplateSummary,
   ProjectFile,
+  ShareProjectAssetsResponse,
+  ShareTargetProject,
+  ShareTargetProjectsResponse,
   SkillDetail,
   SkillSummary,
   UpdateDeployConfigRequest,
@@ -409,6 +412,39 @@ export async function checkDeploymentLink(
     throw new Error(payload?.error?.message || payload?.message || `Link check failed (${resp.status})`);
   }
   return (await resp.json()) as DeployProjectFileResponse;
+}
+
+export async function fetchShareTargetProjects(): Promise<ShareTargetProject[]> {
+  try {
+    const resp = await fetch('/api/share-target-projects');
+    if (!resp.ok) return [];
+    const json = (await resp.json()) as ShareTargetProjectsResponse;
+    return json.projects ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function shareProjectAssets(input: {
+  projectId: string;
+  targetProjectName: string;
+  root?: string;
+}): Promise<ShareProjectAssetsResponse> {
+  const resp = await fetch(`/api/projects/${encodeURIComponent(input.projectId)}/share-assets`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      targetProjectName: input.targetProjectName,
+      root: input.root || '',
+    }),
+  });
+  if (!resp.ok) {
+    const payload = (await resp.json().catch(() => null)) as
+      | { error?: { message?: string }; message?: string }
+      | null;
+    throw new Error(payload?.error?.message || payload?.message || `Upload failed (${resp.status})`);
+  }
+  return (await resp.json()) as ShareProjectAssetsResponse;
 }
 
 // Project files — all paths are scoped under .od/projects/<id>/ on disk.

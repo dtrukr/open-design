@@ -683,6 +683,19 @@ export const en: Dict = {
   'fileViewer.templateNameDefault': 'Untitled template',
   'fileViewer.templateDescPrompt':
     'Short description (optional — what makes this template useful?)',
+  'fileViewer.shareProject': 'Upload to project…',
+  'fileViewer.shareProjectModalTitle': 'Upload to project',
+  'fileViewer.shareProjectModalSubtitle':
+    'Copy this design asset tree into a new design directory in a registered project.',
+  'fileViewer.shareProjectTarget': 'Project',
+  'fileViewer.shareProjectLoading': 'Loading projects…',
+  'fileViewer.shareProjectNoTargets': 'No registered projects were found.',
+  'fileViewer.shareProjectUpload': 'Upload files',
+  'fileViewer.shareProjectUploading': 'Uploading…',
+  'fileViewer.shareProjectUploaded': 'Upload complete',
+  'fileViewer.shareProjectUploadedSummary':
+    'Uploaded {count} files to {project}/{dir}.',
+  'fileViewer.shareProjectFailed': 'Upload failed.',
   'liveArtifact.refresh.button': 'Refresh',
   'liveArtifact.refresh.buttonTitle': 'Refresh this live artifact',
   'liveArtifact.refresh.loadingTitle': 'Loading live artifact…',

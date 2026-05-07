@@ -662,6 +662,19 @@ export const tr: Dict = {
   'fileViewer.templateNameDefault': 'Başlıksız şablon',
   'fileViewer.templateDescPrompt':
     'Kısa açıklama (opsiyonel — bu şablonu kullanışlı yapan ne?)',
+  'fileViewer.shareProject': 'Upload to project…',
+  'fileViewer.shareProjectModalTitle': 'Upload to project',
+  'fileViewer.shareProjectModalSubtitle':
+    'Copy this design asset tree into a new design directory in a registered project.',
+  'fileViewer.shareProjectTarget': 'Project',
+  'fileViewer.shareProjectLoading': 'Loading projects…',
+  'fileViewer.shareProjectNoTargets': 'No registered projects were found.',
+  'fileViewer.shareProjectUpload': 'Upload files',
+  'fileViewer.shareProjectUploading': 'Uploading…',
+  'fileViewer.shareProjectUploaded': 'Upload complete',
+  'fileViewer.shareProjectUploadedSummary':
+    'Uploaded {count} files to {project}/{dir}.',
+  'fileViewer.shareProjectFailed': 'Upload failed.',
   'fileViewer.deployToVercel': 'Vercel’e yayınla',
   'fileViewer.redeployToVercel': 'Yeniden yayınla',
   'fileViewer.deployingToVercel': 'Vercel’e yayınlanıyor…',
