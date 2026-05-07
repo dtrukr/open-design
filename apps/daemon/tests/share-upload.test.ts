@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -44,6 +44,38 @@ describe('share upload', () => {
     await expect(readFile(path.join(targetProjectPath, 'design', 'index.html'), 'utf8'))
       .resolves.toBe('<h1>Hello</h1>');
     await expect(readFile(path.join(targetProjectPath, 'design', 'assets', 'style.css'), 'utf8'))
+      .resolves.toBe('body { color: red; }');
+  });
+
+  it('prefers public when the target project has a public directory', async () => {
+    const sourceRoot = await tempDir();
+    const targetProjectPath = await tempDir();
+    await mkdir(path.join(targetProjectPath, 'public'));
+    await writeFile(path.join(sourceRoot, 'index.html'), '<h1>Hello</h1>');
+    await writeFile(path.join(sourceRoot, 'style.css'), 'body { color: red; }');
+
+    const first = await uploadDesignAssetsToProject({
+      targetProject: { name: 'target', path: targetProjectPath },
+      sourceRoot,
+      entries: [
+        { relPath: 'index.html', fullPath: path.join(sourceRoot, 'index.html') },
+        { relPath: 'assets/style.css', fullPath: path.join(sourceRoot, 'style.css') },
+      ],
+    });
+    const second = await uploadDesignAssetsToProject({
+      targetProject: { name: 'target', path: targetProjectPath },
+      sourceRoot,
+      entries: [
+        { relPath: 'index.html', fullPath: path.join(sourceRoot, 'index.html') },
+      ],
+    });
+
+    expect(first.directoryName).toBe('design');
+    expect(first.destinationPath).toBe(path.join(targetProjectPath, 'public', 'design'));
+    expect(second.destinationPath).toBe(path.join(targetProjectPath, 'public', 'design-2'));
+    await expect(readFile(path.join(targetProjectPath, 'public', 'design', 'index.html'), 'utf8'))
+      .resolves.toBe('<h1>Hello</h1>');
+    await expect(readFile(path.join(targetProjectPath, 'public', 'design', 'assets', 'style.css'), 'utf8'))
       .resolves.toBe('body { color: red; }');
   });
 });

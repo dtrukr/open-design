@@ -66,9 +66,10 @@ async function uploadRemote(
 }
 
 async function createLocalDestinationDir(projectPath: string): Promise<string> {
+  const basePath = await resolveLocalDestinationBase(projectPath);
   for (let i = 1; i < 10_000; i += 1) {
     const name = i === 1 ? DESTINATION_BASE_NAME : `${DESTINATION_BASE_NAME}-${i}`;
-    const destinationPath = path.join(projectPath, name);
+    const destinationPath = path.join(basePath, name);
     try {
       await mkdir(destinationPath);
       return destinationPath;
@@ -86,7 +87,12 @@ async function createLocalDestinationDir(projectPath: string): Promise<string> {
 async function createRemoteDestinationDir(targetProject: RegistryProject): Promise<string> {
   const script = `
 set -eu
-base=${shellQuote(targetProject.path)}
+project=${shellQuote(targetProject.path)}
+if [ -d "$project/public" ]; then
+  base="$project/public"
+else
+  base="$project"
+fi
 i=1
 while [ "$i" -lt 10000 ]; do
   if [ "$i" -eq 1 ]; then
@@ -112,6 +118,13 @@ exit 1
   const destinationPath = stdout.trim().split(/\r?\n/).at(-1)?.trim();
   if (!destinationPath) throw new Error('remote destination directory was not returned');
   return destinationPath;
+}
+
+async function resolveLocalDestinationBase(projectPath: string): Promise<string> {
+  const publicPath = path.join(projectPath, 'public');
+  const publicStat = await stat(publicPath).catch(() => null);
+  if (publicStat?.isDirectory()) return publicPath;
+  return projectPath;
 }
 
 async function tarUpload(
