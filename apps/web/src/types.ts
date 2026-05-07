@@ -2,12 +2,17 @@ import type {
   AgentInfo,
   AgentCliEnvPrefs,
   AgentModelPrefs,
+  AgentTestRequest,
   AppVersionInfo,
   AppVersionResponse,
   AudioKind,
   ChatAttachment,
   ChatCommentAttachment,
   ChatMessage,
+  ConnectionTestKind,
+  ConnectionTestProtocol,
+  ConnectionTestRequest,
+  ConnectionTestResponse,
   Conversation,
   DeployConfigResponse,
   DeployProjectFileResponse,
@@ -23,6 +28,7 @@ import type {
   LiveArtifactSummary,
   MediaAspect,
   ProjectDeploymentsResponse,
+  ProviderTestRequest,
   PersistedAgentEvent,
   Project,
   PreviewCommentMember,
@@ -254,6 +260,7 @@ export interface AppConfig {
   skillId: string | null;
   designSystemId: string | null;
   theme?: AppTheme;
+  accentColor?: string;
   // True once the user has been through the welcome onboarding modal at
   // least once (saved or skipped). Bootstrap skips the auto-popup when
   // this is set so refreshing the page doesn't re-prompt.
@@ -346,9 +353,14 @@ export interface PromptTemplateDetail extends PromptTemplateSummary {
 
 export type {
   AgentInfo,
+  AgentTestRequest,
   AppVersionInfo,
   AppVersionResponse,
   AudioKind,
+  ConnectionTestKind,
+  ConnectionTestProtocol,
+  ConnectionTestRequest,
+  ConnectionTestResponse,
   Conversation,
   DeployConfigResponse,
   DeployProjectFileResponse,
@@ -377,6 +389,7 @@ export type {
   ShareProjectAssetsResponse,
   ShareTargetProject,
   ShareTargetProjectsResponse,
+  ProviderTestRequest,
   CodexPetSummary,
   CodexPetsResponse,
   SyncCommunityPetsRequest,

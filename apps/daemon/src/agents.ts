@@ -74,6 +74,7 @@ const agentCapabilities = new Map();
 // documented, non-secret runtime knobs that belong to the adapter contract.
 
 const DEFAULT_MODEL_OPTION = { id: 'default', label: 'Default (CLI config)' };
+const AGENT_BIN_ENV_KEYS = new Map([['codex', 'CODEX_BIN']]);
 
 // Map a user-picked reasoning effort to one the chosen model will accept.
 // Codex's CLI accepts `none | minimal | low | medium | high | xhigh`, but
@@ -558,39 +559,52 @@ export const AGENT_DEFS = [
     name: 'GitHub Copilot CLI',
     bin: 'copilot',
     versionArgs: ['--version'],
-    // The prompt is passed directly as the value of `-p`: `copilot -p
-    // "<prompt>" --allow-all-tools --output-format json`. Copilot does NOT
-    // treat `-` as a stdin sentinel — it reads it as a literal one-character
-    // prompt string — so the previous `-p -` + stdin pattern produced a
-    // nonsensical single-dash prompt instead of the composed prompt body.
+    // Prompt is delivered via stdin (gated by `promptViaStdin: true`
+    // below) to avoid Windows `spawn ENAMETOOLONG` (issue #705):
+    // `copilot -p <body>` ships the full composed prompt as a single
+    // argv entry, and CreateProcess caps `lpCommandLine` at ~32 KB
+    // direct or ~8 KB through a `.cmd` shim. Any non-trivial Open
+    // Design prompt blows past that — even a "Hi" expands to several
+    // thousand chars after skills + design-system context are composed
+    // in.
     //
-    // `--allow-all-tools` is required for non-interactive runs: without it
-    // the CLI blocks waiting for human approval on every tool call. Unlike
-    // Codex (where `exec` is a dedicated headless subcommand with
-    // auto-approve baked in) or Claude Code (which inherits its permission
-    // policy from the user's settings.json), Copilot's `-p` mode always
-    // prompts unless this flag is passed explicitly.
+    // The transport is "omit `-p` entirely, pipe the prompt to stdin"
+    // per upstream copilot-cli issue #1046 (closed as already supported,
+    // confirmed working on Copilot CLI for `echo "..." | copilot
+    // --model <id>` and `cat prompt.txt | copilot --model <id>`). The
+    // earlier `-p -` attempt (PR #351) and the argv-bound revert
+    // (PR #466) both pre-dated that confirmation: `-p -` made Copilot
+    // interpret `-` as a literal one-character prompt, but omitting
+    // `-p` entirely is a separate code path that does delegate to
+    // stdin under a non-TTY pipe — which is exactly how the daemon
+    // spawns the child (`stdio: ['pipe', 'pipe', 'pipe']`).
     //
-    // `--output-format json` produces JSONL that copilot-stream.js parses
-    // into the same typed events as claude-stream.js.
+    // `--allow-all-tools` is still required for non-interactive runs:
+    // without it the CLI blocks waiting for human approval on every
+    // tool call. Unlike Codex (where `exec` is a dedicated headless
+    // subcommand with auto-approve baked in) or Claude Code (which
+    // inherits its permission policy from the user's settings.json),
+    // Copilot always prompts unless this flag is passed explicitly.
     //
-    // `--add-dir` (repeatable, same flag as Claude Code's) widens Copilot's
-    // path-level sandbox to skill seeds + design-system specs outside the
-    // project cwd.
+    // `--output-format json` produces JSONL that copilot-stream.js
+    // parses into the same typed events as claude-stream.js.
     //
-    // No `models` subcommand; the CLI accepts whatever the user's Copilot
-    // subscription exposes. Ship a small evidence-based hint list — the
-    // default we observed in the JSON stream and the example from
-    // `copilot --help`. Users can paste any other id via Settings.
+    // `--add-dir` (repeatable, same flag as Claude Code's) widens
+    // Copilot's path-level sandbox to skill seeds + design-system
+    // specs outside the project cwd.
+    //
+    // No `models` subcommand; the CLI accepts whatever the user's
+    // Copilot subscription exposes. Ship a small evidence-based hint
+    // list — the default we observed in the JSON stream and the
+    // example from `copilot --help`. Users can paste any other id via
+    // Settings.
     fallbackModels: [
       DEFAULT_MODEL_OPTION,
       { id: 'claude-sonnet-4.6', label: 'Claude Sonnet 4.6' },
       { id: 'gpt-5.2', label: 'GPT-5.2' },
     ],
-    buildArgs: (prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
+    buildArgs: (_prompt, _imagePaths, extraAllowedDirs = [], options = {}) => {
       const args = [
-        '-p',
-        prompt,
         '--allow-all-tools',
         '--output-format',
         'json',
@@ -604,7 +618,7 @@ export const AGENT_DEFS = [
       for (const d of dirs) args.push('--add-dir', d);
       return args;
     },
-    promptViaStdin: false,
+    promptViaStdin: true,
     streamFormat: 'copilot-stream-json',
   },
   {
@@ -860,8 +874,20 @@ export function resolveOnPath(bin) {
 // agents whose forks ship under a different binary name but speak the
 // exact same CLI (Claude Code → OpenClaude, issue #235). Returns null
 // when no candidate is on PATH.
-export function resolveAgentExecutable(def) {
+function configuredExecutableOverride(def, configuredEnv = {}) {
+  const envKey = AGENT_BIN_ENV_KEYS.get(def?.id);
+  if (!envKey) return null;
+  const raw = configuredEnv?.[envKey];
+  if (typeof raw !== 'string' || raw.trim().length === 0) return null;
+  const expanded = expandHomePath(raw.trim());
+  if (!path.isAbsolute(expanded)) return null;
+  return existsSync(expanded) ? expanded : null;
+}
+
+export function resolveAgentExecutable(def, configuredEnv = {}) {
   if (!def?.bin) return null;
+  const configured = configuredExecutableOverride(def, configuredEnv);
+  if (configured) return configured;
   const candidates = [
     def.bin,
     ...(Array.isArray(def.fallbackBins) ? def.fallbackBins : []),
@@ -905,7 +931,7 @@ async function fetchModels(def, resolvedBin, env) {
 }
 
 async function probe(def, configuredEnv = {}) {
-  const resolved = resolveAgentExecutable(def);
+  const resolved = resolveAgentExecutable(def, configuredEnv);
   if (!resolved) {
     return {
       ...stripFns(def),
@@ -1225,10 +1251,10 @@ export function checkWindowsDirectExeCommandLineBudget(def, resolvedBin, args) {
 // Used by the chat handler so spawn() gets the same executable that
 // detection reported as available — fixes Windows ENOENT when the bare
 // bin name isn't on the child process's PATH (issue #10).
-export function resolveAgentBin(id) {
+export function resolveAgentBin(id, configuredEnv = {}) {
   const def = getAgentDef(id);
   if (!def?.bin) return null;
-  return resolveAgentExecutable(def);
+  return resolveAgentExecutable(def, configuredEnv);
 }
 
 // Build the env passed to spawn() for a given agent adapter.
