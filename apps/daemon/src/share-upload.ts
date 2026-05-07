@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { copyFile, mkdir, stat } from 'node:fs/promises';
+import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RegistryProject } from './project-registry.js';
 
@@ -42,10 +42,11 @@ async function uploadLocal(
     await mkdir(path.dirname(target), { recursive: true });
     await copyFile(entry.fullPath, target);
   }
+  const createdIndex = await createLocalHtmlIndexIfMissing(destinationPath, entries);
   return {
     directoryName: path.basename(destinationPath),
     destinationPath,
-    fileCount: entries.length,
+    fileCount: entries.length + (createdIndex ? 1 : 0),
     uploadedAt: Date.now(),
   };
 }
@@ -57,10 +58,11 @@ async function uploadRemote(
 ): Promise<ShareUploadResult> {
   const destinationPath = await createRemoteDestinationDir(targetProject);
   await tarUpload(targetProject.ssh!, sourceRoot, destinationPath, entries);
+  const createdIndex = await createRemoteHtmlIndexIfMissing(targetProject.ssh!, destinationPath, entries);
   return {
     directoryName: path.posix.basename(destinationPath),
     destinationPath,
-    fileCount: entries.length,
+    fileCount: entries.length + (createdIndex ? 1 : 0),
     uploadedAt: Date.now(),
   };
 }
@@ -127,6 +129,162 @@ async function resolveLocalDestinationBase(projectPath: string): Promise<string>
   return projectPath;
 }
 
+async function createLocalHtmlIndexIfMissing(
+  destinationPath: string,
+  entries: ShareAssetEntry[],
+): Promise<boolean> {
+  const indexPath = path.join(destinationPath, 'index.html');
+  const existing = await stat(indexPath).catch(() => null);
+  if (existing) return false;
+  await writeFile(indexPath, renderHtmlIndex(entries), 'utf8');
+  return true;
+}
+
+async function createRemoteHtmlIndexIfMissing(
+  sshTarget: string,
+  destinationPath: string,
+  entries: ShareAssetEntry[],
+): Promise<boolean> {
+  const script = `
+set -eu
+index_path=${shellQuote(path.posix.join(destinationPath, 'index.html'))}
+if [ -e "$index_path" ]; then
+  printf 'exists\\n'
+  exit 0
+fi
+cat > "$index_path"
+printf 'created\\n'
+`.trim();
+  const { stdout } = await runProcess('ssh', [sshTarget, script], {
+    timeoutMs: 30_000,
+    input: renderHtmlIndex(entries),
+  });
+  return stdout.trim().split(/\r?\n/).at(-1)?.trim() === 'created';
+}
+
+function renderHtmlIndex(entries: ShareAssetEntry[]): string {
+  const htmlFiles = entries
+    .map((entry) => normalizeAssetRelPath(entry.relPath))
+    .filter((relPath) => relPath && relPath.toLowerCase().endsWith('.html'))
+    .filter((relPath) => relPath !== 'index.html')
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  const links = htmlFiles.length > 0
+    ? htmlFiles.map((relPath) => `          <li><a href="${escapeHtmlAttribute(relativeHref(relPath))}">${escapeHtml(relPath)}</a></li>`).join('\n')
+    : '          <li><span>No HTML files were included in this upload.</span></li>';
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Design Assets</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f7f4ef;
+        color: #211f1b;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 48px 20px;
+      }
+      main {
+        width: min(760px, 100%);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2rem, 5vw, 4rem);
+        line-height: 0.95;
+        letter-spacing: 0;
+      }
+      p {
+        margin: 0 0 28px;
+        color: #6f6a60;
+        font-size: 1rem;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      a,
+      span {
+        display: block;
+        border: 1px solid rgba(33, 31, 27, 0.16);
+        border-radius: 8px;
+        padding: 16px 18px;
+        background: rgba(255, 255, 255, 0.62);
+        color: inherit;
+        text-decoration: none;
+        overflow-wrap: anywhere;
+      }
+      a:hover,
+      a:focus-visible {
+        border-color: rgba(33, 31, 27, 0.34);
+        background: #fff;
+        outline: none;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          background: #171512;
+          color: #f3eee5;
+        }
+        p {
+          color: #b6afa3;
+        }
+        a,
+        span {
+          border-color: rgba(243, 238, 229, 0.16);
+          background: rgba(255, 255, 255, 0.06);
+        }
+        a:hover,
+        a:focus-visible {
+          border-color: rgba(243, 238, 229, 0.34);
+          background: rgba(255, 255, 255, 0.1);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Design Assets</h1>
+      <p>HTML files included in this upload.</p>
+      <ul>
+${links}
+      </ul>
+    </main>
+  </body>
+</html>
+`;
+}
+
+function normalizeAssetRelPath(relPath: string): string {
+  return relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
+function relativeHref(relPath: string): string {
+  return relPath.split('/').map((part) => encodeURIComponent(part)).join('/');
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return escapeHtml(value);
+}
+
 async function tarUpload(
   sshTarget: string,
   sourceRoot: string,
@@ -164,12 +322,19 @@ async function tarUpload(
 async function runProcess(
   command: string,
   args: string[],
-  opts: { timeoutMs: number },
+  opts: { timeoutMs: number; input?: string },
 ): Promise<{ stdout: string; stderr: string }> {
-  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(command, args, { stdio: [opts.input == null ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
   const timer = setTimeout(() => child.kill('SIGTERM'), opts.timeoutMs);
   let stdout = '';
   let stderr = '';
+  if (opts.input != null && child.stdin) {
+    child.stdin.end(opts.input);
+  }
+  if (!child.stdout || !child.stderr) {
+    child.kill('SIGTERM');
+    throw new Error(`${command} did not expose stdout/stderr`);
+  }
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk) => {
