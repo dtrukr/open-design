@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { parseDocument } from 'yaml';
 
 export interface RegistryProject {
   name: string;
@@ -43,80 +44,35 @@ export async function resolveShareTargetProject(name: string): Promise<RegistryP
 }
 
 export function parseProjectsRegistry(raw: string): RegistryProject[] {
-  const lines = raw.split(/\r?\n/);
-  const out: RegistryProject[] = [];
-  let inProjects = false;
-  let current: Record<string, unknown> | null = null;
-  let activeListKey: string | null = null;
-
-  function commit(): void {
-    if (!current) return;
-    const name = stringValue(current.name);
-    const projectPath = stringValue(current.path);
-    if (name && projectPath) {
-      const project: RegistryProject = {
-        name,
-        path: projectPath,
-      };
-      const machine = stringValue(current.machine);
-      const ssh = stringValue(current.ssh);
-      const sessionPrefix = stringValue(current.session_prefix);
-      const aliases = arrayValue(current.aliases);
-      if (machine) project.machine = machine;
-      if (ssh) project.ssh = ssh;
-      if (sessionPrefix) project.sessionPrefix = sessionPrefix;
-      if (aliases) project.aliases = aliases;
-      out.push(project);
-    }
-    current = null;
-    activeListKey = null;
+  const doc = parseDocument(raw);
+  if (doc.errors.length > 0) {
+    throw new Error(`invalid projects.yml: ${doc.errors[0]?.message ?? 'YAML parse failed'}`);
   }
-
-  for (const line of lines) {
-    if (/^\s*$/.test(line) || /^\s*#/.test(line)) continue;
-    if (!inProjects) {
-      if (/^projects:\s*$/.test(line)) inProjects = true;
-      continue;
-    }
-
-    const projectMatch = /^-\s+([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (projectMatch) {
-      commit();
-      current = {};
-      activeListKey = null;
-      current[projectMatch[1]!] = parseScalar(projectMatch[2] || '');
-      continue;
-    }
-
-    const nestedListMatch = /^\s+-\s+(.+)$/.exec(line);
-    if (nestedListMatch && current && activeListKey) {
-      const value = parseScalar(nestedListMatch[1] || '');
-      const prior = Array.isArray(current[activeListKey]) ? current[activeListKey] as unknown[] : [];
-      current[activeListKey] = [...prior, value];
-      continue;
-    }
-
-    const fieldMatch = /^\s{2}([A-Za-z0-9_-]+):\s*(.*)$/.exec(line);
-    if (!fieldMatch || !current) continue;
-    const key = fieldMatch[1]!;
-    const value = fieldMatch[2] || '';
-    if (value === '') {
-      current[key] = [];
-      activeListKey = key;
-    } else {
-      current[key] = parseScalar(value);
-      activeListKey = null;
-    }
-  }
-  commit();
-  return out;
+  const data = doc.toJS() as unknown;
+  if (!isRecord(data) || !Array.isArray(data.projects)) return [];
+  return data.projects
+    .filter(isRecord)
+    .map(projectFromYaml)
+    .filter((project): project is RegistryProject => Boolean(project));
 }
 
-function parseScalar(raw: string): string {
-  const value = raw.trim();
-  if (!value) return '';
-  const quoted = /^(['"])(.*)\1$/.exec(value);
-  return quoted ? quoted[2] || '' : value;
+function projectFromYaml(raw: Record<string, unknown>): RegistryProject | null {
+  const name = stringValue(raw.name);
+  const projectPath = stringValue(raw.path);
+  if (!name || !projectPath) return null;
+  const project: RegistryProject = {
+    name,
+    path: projectPath,
+  };
+  const machine = stringValue(raw.machine);
+  const ssh = stringValue(raw.ssh);
+  const sessionPrefix = stringValue(raw.session_prefix);
+  const aliases = arrayValue(raw.aliases);
+  if (machine) project.machine = machine;
+  if (ssh) project.ssh = ssh;
+  if (sessionPrefix) project.sessionPrefix = sessionPrefix;
+  if (aliases) project.aliases = aliases;
+  return project;
 }
 
 function stringValue(value: unknown): string | undefined {
@@ -133,4 +89,8 @@ function arrayValue(value: unknown): string[] | undefined {
 
 function normalizeKey(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
