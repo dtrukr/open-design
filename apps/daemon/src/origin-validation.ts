@@ -63,6 +63,7 @@ export function isPrivateIpv4(hostname: unknown): boolean {
   const [a, b] = octets as [number, number, number, number];
   return (
     a === 10 ||
+    (a === 100 && b >= 64 && b <= 127) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 169 && b === 254)
