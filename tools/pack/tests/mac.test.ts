@@ -1,11 +1,13 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os, { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ToolPackConfig } from "../src/config.js";
-import { resolveSeededAppConfigPaths, seedPackagedAppConfig } from "../src/mac.js";
+import { resolveMacPaths } from "../src/mac/paths.js";
+import { resolveSeededAppConfigPaths, seedPackagedAppConfig } from "../src/mac/index.js";
+import * as macLifecycle from "../src/mac/lifecycle.js";
 
 function makeConfig(root: string, overrides: Partial<ToolPackConfig> = {}): ToolPackConfig {
   return {
@@ -32,6 +34,7 @@ function makeConfig(root: string, overrides: Partial<ToolPackConfig> = {}): Tool
         namespaceBaseRoot: join(root, ".tmp", "tools-pack", "runtime", "mac", "namespaces"),
         namespaceRoot: join(root, ".tmp", "tools-pack", "runtime", "mac", "namespaces", "local-test"),
       },
+      cacheRoot: join(root, ".tmp", "tools-pack", "cache"),
       toolPackRoot: join(root, ".tmp", "tools-pack"),
     },
     silent: true,
@@ -57,8 +60,8 @@ describe("resolveSeededAppConfigPaths", () => {
   it("uses workspace .od by default", () => {
     const config = makeConfig("/work");
     expect(resolveSeededAppConfigPaths(config)).toEqual({
-      sourcePath: "/work/.od/app-config.json",
-      targetPath: "/work/.tmp/tools-pack/runtime/mac/namespaces/local-test/data/app-config.json",
+      sourcePath: join("/work", ".od", "app-config.json"),
+      targetPath: join("/work", ".tmp", "tools-pack", "runtime", "mac", "namespaces", "local-test", "data", "app-config.json"),
     });
   });
 
@@ -66,8 +69,8 @@ describe("resolveSeededAppConfigPaths", () => {
     process.env.OD_DATA_DIR = "/custom/data";
     const config = makeConfig("/work");
     expect(resolveSeededAppConfigPaths(config)).toEqual({
-      sourcePath: "/custom/data/app-config.json",
-      targetPath: "/work/.tmp/tools-pack/runtime/mac/namespaces/local-test/data/app-config.json",
+      sourcePath: join("/custom/data", "app-config.json"),
+      targetPath: join("/work", ".tmp", "tools-pack", "runtime", "mac", "namespaces", "local-test", "data", "app-config.json"),
     });
   });
 
@@ -75,8 +78,8 @@ describe("resolveSeededAppConfigPaths", () => {
     process.env.OD_DATA_DIR = "e2e/ui/.od-data";
     const config = makeConfig("/work");
     expect(resolveSeededAppConfigPaths(config)).toEqual({
-      sourcePath: "/work/e2e/ui/.od-data/app-config.json",
-      targetPath: "/work/.tmp/tools-pack/runtime/mac/namespaces/local-test/data/app-config.json",
+      sourcePath: resolve("/work", "e2e", "ui", ".od-data", "app-config.json"),
+      targetPath: join("/work", ".tmp", "tools-pack", "runtime", "mac", "namespaces", "local-test", "data", "app-config.json"),
     });
   });
 
@@ -85,7 +88,7 @@ describe("resolveSeededAppConfigPaths", () => {
     const config = makeConfig("/work");
     expect(resolveSeededAppConfigPaths(config)).toEqual({
       sourcePath: join(os.homedir(), ".open-design", "app-config.json"),
-      targetPath: "/work/.tmp/tools-pack/runtime/mac/namespaces/local-test/data/app-config.json",
+      targetPath: join("/work", ".tmp", "tools-pack", "runtime", "mac", "namespaces", "local-test", "data", "app-config.json"),
     });
   });
 });
@@ -126,6 +129,40 @@ describe("seedPackagedAppConfig", () => {
       await expect(
         readFile(join(config.roots.runtime.namespaceRoot, "data", "app-config.json"), "utf8"),
       ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("prepareMacLaunchConfig", () => {
+  it("injects the runtime namespace base root for portable mac starts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "open-design-tools-pack-mac-"));
+    try {
+      const config = makeConfig(root, { portable: true });
+      const paths = resolveMacPaths(config);
+      await mkdir(join(paths.installedAppPath, "Contents", "Resources"), { recursive: true });
+      await mkdir(config.roots.runtime.namespaceRoot, { recursive: true });
+      await writeFile(
+        join(paths.installedAppPath, "Contents", "Resources", "open-design-config.json"),
+        `${JSON.stringify({
+          appVersion: "1.2.3",
+          daemonCliEntryRelative: "open-design/bin/od",
+          namespace: config.namespace,
+          nodeCommandRelative: "open-design/bin/node",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const launchConfigPath = await (macLifecycle as {
+        prepareMacLaunchConfig?: (input: ToolPackConfig, appPath: string) => Promise<string | null>;
+      }).prepareMacLaunchConfig?.(config, paths.installedAppPath);
+
+      expect(launchConfigPath).toBe(join(config.roots.runtime.namespaceRoot, "open-design-config.json"));
+      await expect(readFile(String(launchConfigPath), "utf8")).resolves.toContain(
+        `"namespaceBaseRoot": ${JSON.stringify(config.roots.runtime.namespaceBaseRoot)}`,
+      );
+      await expect(readFile(String(launchConfigPath), "utf8")).resolves.toContain('"appVersion": "1.2.3"');
     } finally {
       await rm(root, { force: true, recursive: true });
     }

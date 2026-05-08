@@ -8,7 +8,10 @@ import {
   fetchLiveArtifactCode,
   fetchLiveArtifactRefreshes,
   checkDeploymentLink,
+  CLOUDFLARE_PAGES_PROVIDER_ID,
+  DEFAULT_DEPLOY_PROVIDER_ID,
   deployProjectFile,
+  fetchCloudflarePagesZones,
   fetchDeployConfig,
   fetchProjectDeployments,
   fetchProjectFilePreview,
@@ -21,6 +24,12 @@ import {
   refreshLiveArtifact,
   shareProjectAssets,
   updateDeployConfig,
+  type WebDeployConfigResponse,
+  type WebCloudflarePagesDeploySelection,
+  type WebDeploymentInfo,
+  type WebDeployProjectFileResponse,
+  type WebDeployProviderId,
+  type WebUpdateDeployConfigRequest,
   writeProjectTextFile,
 } from '../providers/registry';
 import type { ProjectFilePreview } from '../providers/registry';
@@ -41,8 +50,6 @@ import { parseForceInline, shouldUrlLoadHtmlPreview } from './file-viewer-render
 import { saveTemplate } from '../state/projects';
 import type {
   LiveArtifactEventItem,
-  DeployConfigResponse,
-  DeployProjectFileResponse,
   LiveArtifact,
   LiveArtifactRefreshLogEntry,
   LiveArtifactViewerTab,
@@ -80,6 +87,36 @@ type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => 
 type SlideState = { active: number; count: number };
 type BoardTool = 'inspect' | 'pod';
 type StrokePoint = { x: number; y: number };
+type DeployProviderOption = {
+  id: WebDeployProviderId;
+  labelKey: 'fileViewer.vercelProvider' | 'fileViewer.cloudflarePagesProvider';
+  tokenLink: string;
+  tokenLinkKey: 'fileViewer.vercelTokenGetLink' | 'fileViewer.cloudflareApiTokenGetLink';
+  tokenPlaceholderKey:
+    | 'fileViewer.vercelTokenPlaceholder'
+    | 'fileViewer.cloudflareApiTokenPlaceholder';
+  tokenReuseHintKey: 'fileViewer.vercelTokenReuseHint' | 'fileViewer.cloudflareApiTokenReuseHint';
+  tokenRequiredKey: 'fileViewer.vercelTokenRequired' | 'fileViewer.cloudflareApiTokenRequired';
+  previewHintKey: 'fileViewer.vercelPreviewOnly' | 'fileViewer.cloudflarePagesPreviewHint';
+  tokenLabelKey:
+    | 'fileViewer.vercelToken'
+    | 'fileViewer.cloudflareApiToken';
+  accountIdLabelKey?: 'fileViewer.cloudflareAccountId';
+  accountIdHintKey?: 'fileViewer.cloudflareAccountIdHint';
+};
+type CloudflarePagesZoneOption = {
+  id: string;
+  name: string;
+  status?: string;
+  type?: string;
+};
+type DeployResultCard = {
+  id: string;
+  label: string;
+  url: string;
+  status: string;
+  message?: string;
+};
 const MAX_BRIDGE_COORDINATE = 1_000_000;
 
 // The five basic style facets the inspect panel exposes. Kept narrow on
@@ -115,6 +152,53 @@ const MARKDOWN_CODE_BLOCK_ATTR = 'data-markdown-code-block';
 const MARKDOWN_COPY_BLOCK_ATTR = 'data-copy-code-block';
 const MARKDOWN_COPY_BUTTON_CLASS = 'markdown-code-copy';
 const MARKDOWN_COPY_TOAST_CLASS = 'markdown-code-toast';
+
+const DEPLOY_PROVIDER_OPTIONS: DeployProviderOption[] = [
+  {
+    id: DEFAULT_DEPLOY_PROVIDER_ID,
+    labelKey: 'fileViewer.vercelProvider',
+    tokenLink: 'https://vercel.com/account/settings/tokens',
+    tokenLinkKey: 'fileViewer.vercelTokenGetLink',
+    tokenPlaceholderKey: 'fileViewer.vercelTokenPlaceholder',
+    tokenReuseHintKey: 'fileViewer.vercelTokenReuseHint',
+    tokenRequiredKey: 'fileViewer.vercelTokenRequired',
+    previewHintKey: 'fileViewer.vercelPreviewOnly',
+    tokenLabelKey: 'fileViewer.vercelToken',
+  },
+  {
+    id: CLOUDFLARE_PAGES_PROVIDER_ID,
+    labelKey: 'fileViewer.cloudflarePagesProvider',
+    tokenLink: 'https://dash.cloudflare.com/profile/api-tokens',
+    tokenLinkKey: 'fileViewer.cloudflareApiTokenGetLink',
+    tokenPlaceholderKey: 'fileViewer.cloudflareApiTokenPlaceholder',
+    tokenReuseHintKey: 'fileViewer.cloudflareApiTokenReuseHint',
+    tokenRequiredKey: 'fileViewer.cloudflareApiTokenRequired',
+    previewHintKey: 'fileViewer.cloudflarePagesPreviewHint',
+    tokenLabelKey: 'fileViewer.cloudflareApiToken',
+    accountIdLabelKey: 'fileViewer.cloudflareAccountId',
+    accountIdHintKey: 'fileViewer.cloudflareAccountIdHint',
+  },
+];
+
+function getDeployProviderOption(providerId: WebDeployProviderId): DeployProviderOption {
+  return DEPLOY_PROVIDER_OPTIONS.find((option) => option.id === providerId) ?? DEPLOY_PROVIDER_OPTIONS[0]!;
+}
+
+function normalizeCloudflareDomainPrefixInput(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+function isValidCloudflareDomainPrefixInput(raw: string): boolean {
+  const prefix = normalizeCloudflareDomainPrefixInput(raw);
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(prefix);
+}
+
+function deployResultState(status?: string): 'ready' | 'delayed' | 'protected' | 'failed' {
+  if (status === 'protected') return 'protected';
+  if (status === 'failed' || status === 'conflict') return 'failed';
+  if (status === 'link-delayed' || status === 'pending') return 'delayed';
+  return 'ready';
+}
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
   try {
@@ -298,6 +382,7 @@ export function LiveArtifactViewer({
   onRefreshArtifacts?: () => Promise<void> | void;
 }) {
   const t = useT();
+  const tabs = useMemo(() => liveArtifactViewerTabs(t), [t]);
   const [mode, setMode] = useState<LiveArtifactViewerTab>('preview');
   const [detail, setDetail] = useState<LiveArtifact | null>(null);
   const [loading, setLoading] = useState(true);
@@ -480,7 +565,7 @@ export function LiveArtifactViewer({
         </div>
         <div className="viewer-toolbar-actions">
           <div className="viewer-tabs">
-            {LIVE_ARTIFACT_VIEWER_TABS.map((tab) => (
+            {tabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
@@ -597,7 +682,7 @@ export function LiveArtifactViewer({
             <iframe
               data-testid="live-artifact-preview-frame"
               title={liveArtifact.title}
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-popups"
               src={previewUrl}
             />
           </div>
@@ -610,7 +695,7 @@ export function LiveArtifactViewer({
             reloadKey={reloadKey}
           />
         ) : mode === 'data' ? (
-          <JsonPanel value={dataPayload} emptyLabel="No data.json cache available." />
+          <JsonPanel value={dataPayload} emptyLabel={t('liveArtifact.viewer.dataEmpty')} />
         ) : (
           <LiveArtifactRefreshHistoryPanel
             liveArtifact={detail}
@@ -669,16 +754,27 @@ function refreshErrorMessage(error: unknown, t: TranslateFn): string {
   return t('liveArtifact.refresh.genericFailure');
 }
 
-const LIVE_ARTIFACT_VIEWER_TABS: Array<{ id: LiveArtifactViewerTab; label: string }> = [
-  { id: 'preview', label: 'Preview' },
-  { id: 'code', label: 'Code' },
-  { id: 'data', label: 'Data' },
-  { id: 'refresh-history', label: 'Refresh history' },
-];
+function liveArtifactViewerTabs(t: TranslateFn): Array<{ id: LiveArtifactViewerTab; label: string }> {
+  return [
+    { id: 'preview', label: t('liveArtifact.viewer.tabPreview') },
+    { id: 'code', label: t('liveArtifact.viewer.tabCode') },
+    { id: 'data', label: t('liveArtifact.viewer.tabData') },
+    { id: 'refresh-history', label: t('liveArtifact.viewer.tabRefreshHistory') },
+  ];
+}
 
 type LiveArtifactCodeVariant = 'template' | 'rendered-source';
 
-function LiveArtifactCodePanel({ projectId, artifactId, reloadKey }: { projectId: string; artifactId: string; reloadKey: number }) {
+function LiveArtifactCodePanel({
+  projectId,
+  artifactId,
+  reloadKey,
+}: {
+  projectId: string;
+  artifactId: string;
+  reloadKey: number;
+}) {
+  const t = useT();
   const [variant, setVariant] = useState<LiveArtifactCodeVariant>('template');
   const [code, setCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -704,38 +800,45 @@ function LiveArtifactCodePanel({ projectId, artifactId, reloadKey }: { projectId
     <div className="live-artifact-code-panel">
       <div className="live-artifact-code-header">
         <div className="live-artifact-code-copy">
-          <strong>{variant === 'template' ? 'Template HTML' : 'Rendered HTML'}</strong>
+          <strong>
+            {variant === 'template'
+              ? t('liveArtifact.viewer.code.templateHeading')
+              : t('liveArtifact.viewer.code.renderedHeading')}
+          </strong>
           <span>
             {variant === 'template'
-              ? 'The editable template used with data.json to generate the preview.'
-              : 'The generated index.html currently loaded by Preview.'}
+              ? t('liveArtifact.viewer.code.templateHelp')
+              : t('liveArtifact.viewer.code.renderedHelp')}
           </span>
         </div>
-        <div className="viewer-tabs live-artifact-code-tabs" aria-label="Code variant">
+        <div
+          className="viewer-tabs live-artifact-code-tabs"
+          aria-label={t('liveArtifact.viewer.code.variantAria')}
+        >
           <button
             type="button"
             className={`viewer-tab ${variant === 'template' ? 'active' : ''}`}
             onClick={() => setVariant('template')}
           >
-            Template
+            {t('liveArtifact.viewer.code.variantTemplate')}
           </button>
           <button
             type="button"
             className={`viewer-tab ${variant === 'rendered-source' ? 'active' : ''}`}
             onClick={() => setVariant('rendered-source')}
           >
-            Rendered
+            {t('liveArtifact.viewer.code.variantRendered')}
           </button>
         </div>
       </div>
       {loading ? (
-        <div className="viewer-empty">Loading code…</div>
+        <div className="viewer-empty">{t('liveArtifact.viewer.code.loading')}</div>
       ) : failed ? (
-        <div className="viewer-empty">Code is not available yet.</div>
+        <div className="viewer-empty">{t('liveArtifact.viewer.code.unavailable')}</div>
       ) : code && code.trim().length > 0 ? (
         <pre className="viewer-source">{code}</pre>
       ) : (
-        <div className="viewer-empty">This code file is empty.</div>
+        <div className="viewer-empty">{t('liveArtifact.viewer.code.empty')}</div>
       )}
     </div>
   );
@@ -1265,12 +1368,12 @@ function BoardComposerPopover({
       }}
     >
       <div className="comment-popover-head">
-        <div>
+        <div title={target.elementId}>
           <strong id={titleId}>{target.elementId}</strong>
           <span>{target.label}</span>
           <span>{selectionKindLabel(target.selectionKind, target.memberCount)}</span>
         </div>
-        <button type="button" className="ghost" onClick={onClose}>
+        <button type="button" className="ghost" onClick={onClose} title={t('common.close')}>
           {t('common.close')}
         </button>
       </div>
@@ -1459,7 +1562,7 @@ function InspectPanel({
     <aside className="inspect-panel" data-testid="inspect-panel">
       <header className="inspect-panel-head">
         <div className="inspect-panel-title">
-          <strong>{target.label || target.elementId}</strong>
+          <strong title={target.label || target.elementId}>{target.label || target.elementId}</strong>
           <code title={target.selector}>{target.elementId}</code>
         </div>
         <button type="button" className="ghost" onClick={onClose} aria-label="Close inspect">
@@ -2758,15 +2861,18 @@ function HtmlViewer({
   const [templateName, setTemplateName] = useState('');
   const [templateDescription, setTemplateDescription] = useState('');
   const [templateSaveError, setTemplateSaveError] = useState<string | null>(null);
-  const [deployment, setDeployment] = useState<DeployProjectFileResponse | null>(null);
+  const [deployment, setDeployment] = useState<WebDeploymentInfo | null>(null);
+  const [deploymentsByProvider, setDeploymentsByProvider] = useState<Partial<Record<WebDeployProviderId, WebDeploymentInfo>>>({});
   const [deployModalOpen, setDeployModalOpen] = useState(false);
-  const [deployConfig, setDeployConfig] = useState<DeployConfigResponse | null>(null);
+  const [deployConfig, setDeployConfig] = useState<WebDeployConfigResponse | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link'>('idle');
   const [savingDeployConfig, setSavingDeployConfig] = useState(false);
   const [deployError, setDeployError] = useState<string | null>(null);
-  const [deployResult, setDeployResult] = useState<DeployProjectFileResponse | null>(null);
-  const [copiedDeployLink, setCopiedDeployLink] = useState(false);
+  const [deployResult, setDeployResult] = useState<WebDeployProjectFileResponse | null>(null);
+  const [copiedDeployLink, setCopiedDeployLink] = useState<string | null>(null);
+  const [deployProviderId, setDeployProviderId] = useState<WebDeployProviderId>(DEFAULT_DEPLOY_PROVIDER_ID);
+  const [deployToken, setDeployToken] = useState('');
   const [shareProjectModalOpen, setShareProjectModalOpen] = useState(false);
   const [shareTargetProjects, setShareTargetProjects] = useState<ShareTargetProject[]>([]);
   const [shareTargetProjectName, setShareTargetProjectName] = useState('');
@@ -2774,9 +2880,15 @@ function HtmlViewer({
   const [shareProjectUploading, setShareProjectUploading] = useState(false);
   const [shareProjectError, setShareProjectError] = useState<string | null>(null);
   const [shareProjectResult, setShareProjectResult] = useState<ShareProjectAssetsResponse | null>(null);
-  const [vercelToken, setVercelToken] = useState('');
   const [teamId, setTeamId] = useState('');
   const [teamSlug, setTeamSlug] = useState('');
+  const [cloudflareAccountId, setCloudflareAccountId] = useState('');
+  const [cloudflareZones, setCloudflareZones] = useState<CloudflarePagesZoneOption[]>([]);
+  const [cloudflareZonesLoading, setCloudflareZonesLoading] = useState(false);
+  const [cloudflareZonesError, setCloudflareZonesError] = useState<string | null>(null);
+  const [cloudflareZoneId, setCloudflareZoneId] = useState('');
+  const [cloudflareDomainPrefix, setCloudflareDomainPrefix] = useState('');
+  const deployProviderLoadSeqRef = useRef(0);
   const [inTabPresent, setInTabPresent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [boardMode, setBoardMode] = useState(false);
@@ -2831,6 +2943,123 @@ function HtmlViewer({
   const [strokePoints, setStrokePoints] = useState<StrokePoint[]>([]);
   const previewStateKey = `${projectId}:${file.name}`;
   const previewScale = zoom / 100;
+
+  function deploymentMapForCurrentFile(items: WebDeploymentInfo[]) {
+    const next: Partial<Record<WebDeployProviderId, WebDeploymentInfo>> = {};
+    for (const option of DEPLOY_PROVIDER_OPTIONS) {
+      const deploymentForProvider = items.find(
+        (item) => item.fileName === file.name && item.providerId === option.id && item.url?.trim(),
+      );
+      if (deploymentForProvider) next[option.id] = deploymentForProvider;
+    }
+    return next;
+  }
+
+  function syncDeployFormFromConfig(
+    providerId: WebDeployProviderId,
+    config: WebDeployConfigResponse | null,
+  ) {
+    const matchingConfig = config?.providerId === providerId ? config : null;
+    setDeployProviderId(providerId);
+    setDeployConfig(matchingConfig);
+    setDeployToken(matchingConfig?.tokenMask || '');
+    setTeamId(matchingConfig?.teamId || '');
+    setTeamSlug(matchingConfig?.teamSlug || '');
+    setCloudflareAccountId(matchingConfig?.accountId || '');
+    setCloudflareZoneId(matchingConfig?.cloudflarePages?.lastZoneId || '');
+    setCloudflareDomainPrefix(matchingConfig?.cloudflarePages?.lastDomainPrefix || '');
+  }
+
+  function cloudflareConfigHintsFromForm() {
+    const zone = cloudflareZones.find((item) => item.id === cloudflareZoneId);
+    const hints = {
+      ...(cloudflareZoneId.trim() ? { lastZoneId: cloudflareZoneId.trim() } : {}),
+      ...((zone?.name || deployConfig?.cloudflarePages?.lastZoneName)
+        ? { lastZoneName: zone?.name || deployConfig?.cloudflarePages?.lastZoneName }
+        : {}),
+      ...(cloudflareDomainPrefix.trim()
+        ? { lastDomainPrefix: normalizeCloudflareDomainPrefixInput(cloudflareDomainPrefix) }
+        : {}),
+    };
+    return Object.keys(hints).length > 0 ? hints : undefined;
+  }
+
+  function buildDeployConfigRequest(providerId: WebDeployProviderId): WebUpdateDeployConfigRequest {
+    const token = deployToken.trim();
+    if (providerId === CLOUDFLARE_PAGES_PROVIDER_ID) {
+      return {
+        providerId,
+        token,
+        accountId: cloudflareAccountId.trim(),
+        cloudflarePages: cloudflareConfigHintsFromForm(),
+      };
+    }
+    return {
+      providerId,
+      token,
+      teamId: teamId.trim(),
+      teamSlug: teamSlug.trim(),
+    };
+  }
+
+  async function loadDeployProvider(
+    providerId: WebDeployProviderId,
+    options?: { fallbackToExisting?: boolean },
+  ) {
+    const requestSeq = ++deployProviderLoadSeqRef.current;
+    setDeployProviderId(providerId);
+    const deployments = await fetchProjectDeployments(projectId);
+    const nextDeploymentsByProvider = deploymentMapForCurrentFile(deployments);
+    const exactDeployment = nextDeploymentsByProvider[providerId] ?? null;
+    const fallbackDeployment = options?.fallbackToExisting
+      ? Object.values(nextDeploymentsByProvider)[0] ?? null
+      : null;
+    const currentDeployment = exactDeployment ?? fallbackDeployment;
+    // Use the explicit providerId for config/form so a fallback deployment from
+    // another provider only fills the existing-URL display, never the form/credentials.
+    const config = await fetchDeployConfig(providerId);
+    if (requestSeq !== deployProviderLoadSeqRef.current) {
+      return { config: null, currentDeployment: null };
+    }
+    syncDeployFormFromConfig(providerId, config);
+    setDeploymentsByProvider(nextDeploymentsByProvider);
+    setDeployment(currentDeployment ?? null);
+    setDeployResult(currentDeployment ?? null);
+    if (providerId === CLOUDFLARE_PAGES_PROVIDER_ID && config?.configured) {
+      void loadCloudflareZones(config, { requestSeq });
+    }
+    return { config, currentDeployment };
+  }
+
+  async function loadCloudflareZones(
+    config: WebDeployConfigResponse | null = deployConfig,
+    options?: { requestSeq?: number },
+  ) {
+    if (!config?.configured || config.providerId !== CLOUDFLARE_PAGES_PROVIDER_ID) return;
+    const requestSeq = options?.requestSeq ?? deployProviderLoadSeqRef.current;
+    setCloudflareZonesLoading(true);
+    setCloudflareZonesError(null);
+    try {
+      const response = await fetchCloudflarePagesZones();
+      if (requestSeq !== deployProviderLoadSeqRef.current) return;
+      const zones = response?.zones ?? [];
+      setCloudflareZones(zones);
+      const hintedZoneId = response?.cloudflarePages?.lastZoneId || config.cloudflarePages?.lastZoneId || '';
+      const nextZoneId = hintedZoneId && zones.some((zone) => zone.id === hintedZoneId)
+        ? hintedZoneId
+        : zones[0]?.id || '';
+      setCloudflareZoneId(nextZoneId);
+      const hintedPrefix = response?.cloudflarePages?.lastDomainPrefix || config.cloudflarePages?.lastDomainPrefix || '';
+      if (hintedPrefix) setCloudflareDomainPrefix(hintedPrefix);
+    } catch (err) {
+      if (requestSeq !== deployProviderLoadSeqRef.current) return;
+      setCloudflareZones([]);
+      setCloudflareZonesError(err instanceof Error ? err.message : t('fileViewer.cloudflareZonesLoadFailed'));
+    } finally {
+      if (requestSeq === deployProviderLoadSeqRef.current) setCloudflareZonesLoading(false);
+    }
+  }
+
   // Slide deck nav state: the iframe posts the active index + total count
   // back to the host every time a slide settles. Host renders prev/next
   // controls in the toolbar and reflects the count beside them.
@@ -2864,20 +3093,20 @@ function HtmlViewer({
     let cancelled = false;
     setDeployResult(null);
     setDeployError(null);
-    setCopiedDeployLink(false);
+    setCopiedDeployLink(null);
     setDeployPhase('idle');
     void fetchProjectDeployments(projectId).then((items) => {
       if (cancelled) return;
-      const current = items.find(
-        (item) => item.fileName === file.name && item.providerId === 'vercel-self',
-      );
+      const nextDeploymentsByProvider = deploymentMapForCurrentFile(items);
+      const current = nextDeploymentsByProvider[deployProviderId] ?? null;
+      setDeploymentsByProvider(nextDeploymentsByProvider);
       setDeployment(current ?? null);
       setDeployResult(current ?? null);
     });
     return () => {
       cancelled = true;
     };
-  }, [projectId, file.name]);
+  }, [projectId, file.name, deployProviderId]);
 
   // Detect deck-shaped HTML even when the project's skill didn't declare
   // `mode: deck`. Freeform projects often produce a deck because the user
@@ -3598,77 +3827,112 @@ function HtmlViewer({
     }
   }
 
-  async function openDeployModal() {
+  async function openDeployModal(nextProviderId: WebDeployProviderId = deployProviderId) {
     setShareMenuOpen(false);
     setDeployModalOpen(true);
     setDeployError(null);
-    setCopiedDeployLink(false);
+    setCopiedDeployLink(null);
     setDeployPhase('idle');
-    const [config, deployments] = await Promise.all([
-      fetchDeployConfig(),
-      fetchProjectDeployments(projectId),
-    ]);
-    if (config) {
-      setDeployConfig(config);
-      setVercelToken(config.tokenMask || '');
-      setTeamId(config.teamId || '');
-      setTeamSlug(config.teamSlug || '');
-    }
-    const current = deployments.find(
-      (item) => item.fileName === file.name && item.providerId === 'vercel-self',
-    );
-    setDeployment(current ?? null);
-    setDeployResult(current ?? null);
+    await loadDeployProvider(nextProviderId, { fallbackToExisting: true });
+  }
+
+  async function changeDeployProvider(nextProviderId: WebDeployProviderId) {
+    if (nextProviderId === deployProviderId) return;
+    setDeployError(null);
+    setDeployPhase('idle');
+    await loadDeployProvider(nextProviderId);
   }
 
   async function saveDeployConfig() {
     setSavingDeployConfig(true);
     setDeployError(null);
     try {
-      const config = await updateDeployConfig({
-        token: vercelToken,
-        teamId,
-        teamSlug,
-      });
-      if (!config) throw new Error(t('fileViewer.deployConfigSaveFailed'));
-      setDeployConfig(config);
-      setVercelToken(config.tokenMask || '');
-      setTeamId(config.teamId || '');
-      setTeamSlug(config.teamSlug || '');
+      if (deployProviderId === CLOUDFLARE_PAGES_PROVIDER_ID) {
+        if (!deployToken.trim()) {
+          throw new Error(t('fileViewer.cloudflareApiTokenRequired'));
+        }
+        if (!cloudflareAccountId.trim()) {
+          throw new Error(t('fileViewer.cloudflareAccountIdRequired'));
+        }
+      }
+      const config = await updateDeployConfig(buildDeployConfigRequest(deployProviderId));
+      if (!config || config.providerId !== deployProviderId) {
+        throw new Error(t('fileViewer.deployProviderConfigSaveFailed', { provider: deployProviderLabel }));
+      }
+      syncDeployFormFromConfig(deployProviderId, config);
+      if (deployProviderId === CLOUDFLARE_PAGES_PROVIDER_ID) {
+        await loadCloudflareZones(config);
+      }
       return config;
     } catch (err) {
-      setDeployError(err instanceof Error ? err.message : t('fileViewer.deployConfigSaveFailed'));
+      setDeployError(err instanceof Error ? err.message : t('fileViewer.deployProviderConfigSaveFailed', { provider: deployProviderLabel }));
       return null;
     } finally {
       setSavingDeployConfig(false);
     }
   }
 
-  async function deployToVercel() {
+  function buildCloudflarePagesDeploySelection(): WebCloudflarePagesDeploySelection | undefined {
+    if (deployProviderId !== CLOUDFLARE_PAGES_PROVIDER_ID) return undefined;
+    const prefix = normalizeCloudflareDomainPrefixInput(cloudflareDomainPrefix);
+    if (!prefix) return undefined;
+    if (!isValidCloudflareDomainPrefixInput(prefix)) {
+      throw new Error(t('fileViewer.cloudflareDomainPrefixInvalid'));
+    }
+    const zone = cloudflareZones.find((item) => item.id === cloudflareZoneId);
+    if (!zone) {
+      throw new Error(t('fileViewer.cloudflareZoneRequired'));
+    }
+    return {
+      zoneId: zone.id,
+      zoneName: zone.name,
+      domainPrefix: prefix,
+    };
+  }
+
+  async function deployToSelectedProvider() {
     setDeploying(true);
     setDeployPhase('deploying');
     setDeployError(null);
-    setCopiedDeployLink(false);
+    setCopiedDeployLink(null);
     try {
-      const typedToken = vercelToken.trim();
+      const cloudflarePagesSelection = buildCloudflarePagesDeploySelection();
+      const typedToken = deployToken.trim();
       const hasNewToken = typedToken && typedToken !== deployConfig?.tokenMask;
+      const cloudflareHints = cloudflareConfigHintsFromForm();
+      const cloudflareHintsChanged = deployProviderId === CLOUDFLARE_PAGES_PROVIDER_ID && Boolean(
+        cloudflareHints?.lastZoneId !== deployConfig?.cloudflarePages?.lastZoneId ||
+        cloudflareHints?.lastZoneName !== deployConfig?.cloudflarePages?.lastZoneName ||
+        cloudflareHints?.lastDomainPrefix !== deployConfig?.cloudflarePages?.lastDomainPrefix,
+      );
       const needsConfigSave =
         hasNewToken ||
         teamId.trim() !== (deployConfig?.teamId || '') ||
         teamSlug.trim() !== (deployConfig?.teamSlug || '') ||
+        cloudflareAccountId.trim() !== (deployConfig?.accountId || '') ||
+        cloudflareHintsChanged ||
         !deployConfig?.configured;
       if (needsConfigSave) {
         const nextConfig = await saveDeployConfig();
+        if (!nextConfig) return;
         if (!nextConfig?.configured) {
-          throw new Error(t('fileViewer.vercelTokenRequired'));
+          const option = getDeployProviderOption(deployProviderId);
+          throw new Error(t(option.tokenRequiredKey, { provider: t(option.labelKey) }));
         }
       }
       setDeployPhase('preparing-link');
-      const next = await deployProjectFile(projectId, file.name);
+      const next = await deployProjectFile(projectId, file.name, deployProviderId, cloudflarePagesSelection);
+      setDeploymentsByProvider((current) => ({
+        ...current,
+        [next.providerId]: next,
+      }));
       setDeployment(next);
       setDeployResult(next);
     } catch (err) {
-      setDeployError(err instanceof Error ? err.message : t('fileViewer.deployFailed'));
+      const option = getDeployProviderOption(deployProviderId);
+      setDeployError(
+        err instanceof Error ? err.message : t('fileViewer.deployProviderFailed', { provider: t(option.labelKey) }),
+      );
     } finally {
       setDeploying(false);
       setDeployPhase('idle');
@@ -3682,6 +3946,10 @@ function HtmlViewer({
     setDeployPhase('preparing-link');
     try {
       const next = await checkDeploymentLink(projectId, current.id);
+      setDeploymentsByProvider((items) => ({
+        ...items,
+        [next.providerId]: next,
+      }));
       setDeployment(next);
       setDeployResult(next);
     } catch (err) {
@@ -3707,8 +3975,10 @@ function HtmlViewer({
       document.execCommand('copy');
       document.body.removeChild(textarea);
     }
-    setCopiedDeployLink(true);
-    window.setTimeout(() => setCopiedDeployLink(false), 1800);
+    setCopiedDeployLink(safeUrl);
+    window.setTimeout(() => {
+      setCopiedDeployLink((current) => (current === safeUrl ? null : current));
+    }, 1800);
   }
 
   function presentInThisTab() {
@@ -3796,13 +4066,96 @@ function HtmlViewer({
   const boardAvailable = source !== null;
   const activeDeployment = deployResult || deployment;
   const activeDeployedUrl = activeDeployment?.url?.trim() || '';
-  const activeDeploymentReady = activeDeployment?.status === 'ready';
   const activeDeploymentDelayed = activeDeployment?.status === 'link-delayed';
   const activeDeploymentProtected = activeDeployment?.status === 'protected';
-  const activeDeploymentNeedsRetry = activeDeploymentDelayed || activeDeploymentProtected;
-  const copyDeployLabel = copiedDeployLink
-    ? t('fileViewer.copied')
-    : t('fileViewer.copyDeployLink');
+  const activeCloudflarePages = activeDeployment?.providerId === CLOUDFLARE_PAGES_PROVIDER_ID
+    ? activeDeployment.cloudflarePages
+    : undefined;
+  const activeCloudflareCustomDomain = activeCloudflarePages?.customDomain;
+  const deployProvider = getDeployProviderOption(deployProviderId);
+  const deployProviderLabel = t(deployProvider.labelKey);
+  const selectedCloudflareZone = cloudflareZones.find((zone) => zone.id === cloudflareZoneId) ?? null;
+  const normalizedCloudflarePrefix = normalizeCloudflareDomainPrefixInput(cloudflareDomainPrefix);
+  const cloudflareHostnamePreview =
+    selectedCloudflareZone && normalizedCloudflarePrefix
+      ? `${normalizedCloudflarePrefix}.${selectedCloudflareZone.name}`
+      : '';
+  const deployResultCards: DeployResultCard[] = activeCloudflarePages
+    ? (() => {
+        const cards: DeployResultCard[] = [];
+        const pagesDevUrl = activeCloudflarePages.pagesDev?.url || activeDeployedUrl;
+        if (pagesDevUrl) {
+          cards.push({
+            id: 'pages-dev',
+            label: t('fileViewer.cloudflarePagesDevLinkLabel'),
+            url: pagesDevUrl,
+            status: activeCloudflarePages.pagesDev?.status || activeDeployment?.status || 'link-delayed',
+            message: activeCloudflarePages.pagesDev?.statusMessage,
+          });
+        }
+        if (activeCloudflareCustomDomain?.url) {
+          cards.push({
+            id: 'custom-domain',
+            label: t('fileViewer.cloudflareCustomDomainLinkLabel'),
+            url: activeCloudflareCustomDomain.url,
+            status: activeCloudflareCustomDomain.status,
+            message:
+              activeCloudflareCustomDomain.errorMessage ||
+              activeCloudflareCustomDomain.statusMessage,
+          });
+        }
+        return cards;
+      })()
+    : activeDeployedUrl
+      ? [{
+          id: 'default',
+          label: activeDeploymentProtected
+            ? t('fileViewer.deployLinkProtectedLabel')
+            : activeDeploymentDelayed
+              ? t('fileViewer.deployLinkPreparingLabel')
+              : t('fileViewer.deployResultLabel'),
+          url: activeDeployedUrl,
+          status: activeDeployment?.status || 'ready',
+          message: activeDeploymentProtected
+            ? t('fileViewer.deployLinkProtected')
+            : activeDeploymentDelayed
+              ? t('fileViewer.deployLinkDelayed')
+              : activeDeployment?.statusMessage,
+        }]
+      : [];
+  const deployActionLabelFor = (providerId: WebDeployProviderId) => {
+    const option = getDeployProviderOption(providerId);
+    const label = t(option.labelKey);
+    const hasActiveDeploymentForProvider = Boolean(deploymentsByProvider[providerId]?.url?.trim());
+    return hasActiveDeploymentForProvider
+      ? t('fileViewer.redeployToProvider', { provider: label })
+      : t('fileViewer.deployToProvider', { provider: label });
+  };
+  const deployCopyLinks = DEPLOY_PROVIDER_OPTIONS.map((option) => ({
+    providerId: option.id,
+    providerLabel: t(option.labelKey),
+    url: deploymentsByProvider[option.id]?.url?.trim() || '',
+  })).filter((item) => item.url);
+  const deployButtonLabel =
+    deployPhase === 'deploying'
+      ? t('fileViewer.deployingToProvider', { provider: deployProviderLabel })
+      : deployPhase === 'preparing-link'
+        ? t('fileViewer.preparingPublicLink')
+        : t('fileViewer.deployToProvider', { provider: deployProviderLabel });
+  const copyDeployLabel = (url: string) =>
+    copiedDeployLink === url.trim()
+      ? t('fileViewer.copied')
+      : t('fileViewer.copyDeployLink');
+  const copyDeployMenuLabel = (providerLabel: string, url: string) =>
+    copiedDeployLink === url.trim()
+      ? t('fileViewer.copied')
+      : `${t('fileViewer.copyDeployLink')} · ${providerLabel}`;
+  const statusLabelFor = (state: ReturnType<typeof deployResultState>) => {
+    if (state === 'ready') return t('fileViewer.deployLinkReady');
+    if (state === 'protected') return t('fileViewer.deployLinkProtectedLabel');
+    if (state === 'failed') return t('fileViewer.deployLinkFailed');
+    return t('fileViewer.deployLinkPreparingLabel');
+  };
 
   return (
     <div className="viewer html-viewer">
@@ -4152,36 +4505,38 @@ function HtmlViewer({
                         : t('fileViewer.shareProject')}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      void openDeployModal();
-                    }}
-                  >
-                    <span className="share-menu-icon"><Icon name="upload" size={14} /></span>
-                    <span>
-                      {activeDeployedUrl
-                        ? t('fileViewer.redeployToVercel')
-                        : t('fileViewer.deployToVercel')}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    className="share-menu-item"
-                    role="menuitem"
-                    disabled={!activeDeployedUrl}
-                    onClick={() => {
-                      setShareMenuOpen(false);
-                      void copyDeployLink(activeDeployedUrl);
-                    }}
-                  >
-                    <span className="share-menu-icon"><Icon name="copy" size={14} /></span>
-                    <span>
-                      {copyDeployLabel}
-                    </span>
-                  </button>
+                  {DEPLOY_PROVIDER_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className="share-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        void openDeployModal(option.id);
+                      }}
+                    >
+                      <span className="share-menu-icon"><Icon name="upload" size={14} /></span>
+                      <span>{deployActionLabelFor(option.id)}</span>
+                    </button>
+                  ))}
+                  {deployCopyLinks.length > 0 ? (
+                    <div className="share-menu-divider" />
+                  ) : null}
+                  {deployCopyLinks.map((item) => (
+                    <button
+                      key={`copy-${item.providerId}`}
+                      type="button"
+                      className="share-menu-item"
+                      role="menuitem"
+                      onClick={() => {
+                        setShareMenuOpen(false);
+                        void copyDeployLink(item.url);
+                      }}
+                    >
+                      <span className="share-menu-icon"><Icon name="copy" size={14} /></span>
+                      <span>{copyDeployMenuLabel(item.providerLabel, item.url)}</span>
+                    </button>
+                  ))}
                 </div>
               ) : null}
             </div>
@@ -4505,27 +4860,50 @@ function HtmlViewer({
         <div className="modal-backdrop" role="presentation">
           <div className="modal deploy-modal" role="dialog" aria-modal="true">
             <div className="modal-head">
-              <div className="kicker">VERCEL</div>
-              <h2>{t('fileViewer.deployModalTitle')}</h2>
+              <div className="kicker">{deployProviderLabel}</div>
+              <h2>{t('fileViewer.deployToProvider', { provider: deployProviderLabel })}</h2>
               <p className="subtitle">{t('fileViewer.deployModalSubtitle')}</p>
             </div>
             <div className="deploy-form">
-              <div className="field-label-row">
-                <label htmlFor="vercel-token">{t('fileViewer.vercelToken')}</label>
-                <a
-                  href="https://vercel.com/account/settings/tokens"
-                  target="_blank"
-                  rel="noreferrer noopener"
+              <label className="deploy-provider-field">
+                <span>{t('fileViewer.deployProviderLabel')}</span>
+                <select
+                  value={deployProviderId}
+                  onChange={(e) => {
+                    void changeDeployProvider(e.target.value as WebDeployProviderId);
+                  }}
                 >
-                  {t('fileViewer.vercelTokenGetLink')}
-                </a>
+                  {DEPLOY_PROVIDER_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {t(option.labelKey)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="field-label-row">
+                <label htmlFor="deploy-token">{t(deployProvider.tokenLabelKey)}</label>
+                <div className="field-label-note">
+                  {deployConfig?.configured ? (
+                    <p className="hint">{t(deployProvider.tokenReuseHintKey, { provider: deployProviderLabel })}</p>
+                  ) : null}
+                  {deployProviderId === CLOUDFLARE_PAGES_PROVIDER_ID ? (
+                    <p className="hint">{t('fileViewer.cloudflareApiTokenScopeHint')}</p>
+                  ) : null}
+                  <a
+                    href={deployProvider.tokenLink}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {t(deployProvider.tokenLinkKey)}
+                  </a>
+                </div>
               </div>
               <input
-                id="vercel-token"
+                id="deploy-token"
                 type="password"
-                value={vercelToken}
-                placeholder={t('fileViewer.vercelTokenPlaceholder')}
-                onChange={(e) => setVercelToken(e.target.value)}
+                value={deployToken}
+                placeholder={t(deployProvider.tokenPlaceholderKey, { provider: deployProviderLabel })}
+                onChange={(e) => setDeployToken(e.target.value)}
               />
               <div className="deploy-config-actions">
                 <button
@@ -4539,87 +4917,172 @@ function HtmlViewer({
                   {savingDeployConfig ? t('fileViewer.savingConfig') : t('fileViewer.save')}
                 </button>
               </div>
-              {deployConfig?.configured ? (
-                <p className="hint">{t('fileViewer.vercelTokenReuseHint')}</p>
-              ) : null}
-              <div className="deploy-field-grid">
-                <label>
-                  <span>{t('fileViewer.vercelTeamId')}</span>
-                  <input
-                    value={teamId}
-                    placeholder={t('fileViewer.optional')}
-                    onChange={(e) => setTeamId(e.target.value)}
-                  />
-                </label>
-                <label>
-                  <span>{t('fileViewer.vercelTeamSlug')}</span>
-                  <input
-                    value={teamSlug}
-                    placeholder={t('fileViewer.optional')}
-                    onChange={(e) => setTeamSlug(e.target.value)}
-                  />
-                </label>
-              </div>
-              <p className="hint">{t('fileViewer.vercelPreviewOnly')}</p>
-              {deployError ? <p className="deploy-error">{deployError}</p> : null}
-              {activeDeployedUrl ? (
-                <div
-                  className={`deploy-result ${
-                    activeDeploymentProtected ? 'protected' : activeDeploymentDelayed ? 'delayed' : 'ready'
-                  }`}
-                >
-                  <div className="deploy-result-label">
-                    {activeDeploymentProtected
-                      ? t('fileViewer.deployLinkProtectedLabel')
-                      : activeDeploymentDelayed
-                      ? t('fileViewer.deployLinkPreparingLabel')
-                      : t('fileViewer.deployResultLabel')}
+              {deployProviderId === CLOUDFLARE_PAGES_PROVIDER_ID ? (
+                <>
+                  <div className="deploy-field-grid single-field">
+                    <label>
+                      <span>{t('fileViewer.cloudflareAccountId')}</span>
+                      <input
+                        value={cloudflareAccountId}
+                        onChange={(e) => setCloudflareAccountId(e.target.value)}
+                      />
+                      <span className="field-hint">{t('fileViewer.cloudflareAccountIdHint')}</span>
+                    </label>
                   </div>
-                  {activeDeploymentNeedsRetry ? (
-                    <p className="deploy-result-message">
-                      {activeDeploymentProtected
-                        ? t('fileViewer.deployLinkProtected')
-                        : t('fileViewer.deployLinkDelayed')}
-                    </p>
-                  ) : null}
-                  <a href={activeDeployedUrl} target="_blank" rel="noreferrer noopener">
-                    {activeDeployedUrl}
-                  </a>
-                  <div className="deploy-result-actions">
-                    {activeDeploymentNeedsRetry ? (
-                      <button
-                        type="button"
-                        className="viewer-action"
-                        disabled={deployPhase === 'preparing-link'}
-                        onClick={() => {
-                          void retryDeploymentLink();
-                        }}
+                  <div className="deploy-field-grid cloudflare-domain-grid">
+                    <label>
+                      <span>{t('fileViewer.cloudflareDomainPrefixLabel')}</span>
+                      <input
+                        value={cloudflareDomainPrefix}
+                        placeholder={t('fileViewer.cloudflareDomainPrefixPlaceholder')}
+                        onChange={(e) => setCloudflareDomainPrefix(e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      <span>{t('fileViewer.cloudflareZoneLabel')}</span>
+                      <select
+                        value={cloudflareZoneId}
+                        disabled={cloudflareZonesLoading || (!deployConfig?.configured && !cloudflareZones.length)}
+                        onChange={(e) => setCloudflareZoneId(e.target.value)}
                       >
-                        {deployPhase === 'preparing-link'
-                          ? t('fileViewer.preparingPublicLink')
-                          : t('fileViewer.retryLink')}
-                      </button>
-                    ) : null}
+                        {cloudflareZones.length === 0 ? (
+                          <option value="">{t('fileViewer.cloudflareZonePlaceholder')}</option>
+                        ) : null}
+                        {cloudflareZones.map((zone) => (
+                          <option key={zone.id} value={zone.id}>
+                            {zone.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="deploy-config-actions secondary">
                     <button
                       type="button"
-                      className="viewer-action"
+                      className="ghost-link button-like"
+                      disabled={cloudflareZonesLoading || !deployConfig?.configured}
                       onClick={() => {
-                        void copyDeployLink(activeDeployedUrl);
+                        void loadCloudflareZones();
                       }}
                     >
-                      <Icon name="copy" size={14} />
-                      <span>{copyDeployLabel}</span>
+                      {cloudflareZonesLoading ? t('fileViewer.cloudflareZonesLoading') : t('fileViewer.cloudflareZonesRefresh')}
                     </button>
-                    <a
-                      className={`ghost-link ${activeDeploymentReady ? '' : 'disabled'}`}
-                      href={activeDeploymentReady ? activeDeployedUrl : undefined}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      aria-disabled={!activeDeploymentReady}
-                    >
-                      <Icon name="upload" size={14} />
-                      {t('fileViewer.open')}
-                    </a>
+                  </div>
+                  {cloudflareZonesError ? (
+                    <p className="deploy-error">{cloudflareZonesError}</p>
+                  ) : cloudflareZonesLoading ? (
+                    <p className="hint">{t('fileViewer.cloudflareZonesLoading')}</p>
+                  ) : deployConfig?.configured && cloudflareZones.length === 0 ? (
+                    <p className="hint">{t('fileViewer.cloudflareZonesEmpty')}</p>
+                  ) : (
+                    <p className="hint">{t('fileViewer.cloudflareCustomDomainHint')}</p>
+                  )}
+                  {cloudflareDomainPrefix.trim() && !isValidCloudflareDomainPrefixInput(cloudflareDomainPrefix) ? (
+                    <p className="deploy-error">{t('fileViewer.cloudflareDomainPrefixInvalid')}</p>
+                  ) : cloudflareHostnamePreview ? (
+                    <p className="hint">
+                      {t('fileViewer.cloudflareHostnamePreview', { hostname: cloudflareHostnamePreview })}
+                    </p>
+                  ) : null}
+                </>
+              ) : (
+                <div className="deploy-field-grid">
+                  <label>
+                    <span>{t('fileViewer.vercelTeamId')}</span>
+                    <input
+                      value={teamId}
+                      placeholder={t('fileViewer.optional')}
+                      onChange={(e) => setTeamId(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>{t('fileViewer.vercelTeamSlug')}</span>
+                    <input
+                      value={teamSlug}
+                      placeholder={t('fileViewer.optional')}
+                      onChange={(e) => setTeamSlug(e.target.value)}
+                    />
+                  </label>
+                </div>
+              )}
+              <p className="hint">{t(deployProvider.previewHintKey)}</p>
+              {deployError ? <p className="deploy-error">{deployError}</p> : null}
+              {deployResultCards.length > 0 ? (
+                <div className={`deploy-result-block ${deployResultState(activeDeployment?.status)}`}>
+                  <div className="deploy-result-summary">
+                    <div className="deploy-result-summary-head">
+                      <div className="deploy-result-label">{t('fileViewer.deployResultLabel')}</div>
+                      <div className={`deploy-result-badge ${deployResultState(activeDeployment?.status)}`}>
+                        {statusLabelFor(deployResultState(activeDeployment?.status))}
+                      </div>
+                    </div>
+                    {activeDeployment?.statusMessage ? (
+                      <p className="deploy-result-message">{activeDeployment.statusMessage}</p>
+                    ) : null}
+                    <div className="deploy-result-links">
+                      {deployResultCards.map((card) => {
+                        const state = deployResultState(card.status);
+                        const canRetry = state === 'delayed' || state === 'protected';
+                        const isDisabled = state === 'protected' || state === 'failed';
+                        return (
+                          <div key={card.id} className={`deploy-result-link ${state}`}>
+                            <div className="deploy-result-link-main">
+                              <div className="deploy-result-link-head">
+                                <span className="deploy-result-link-label">{card.label}</span>
+                                <span className={`deploy-result-link-state ${state}`}>{statusLabelFor(state)}</span>
+                              </div>
+                              {card.message ? (
+                                <p className="deploy-result-link-message">{card.message}</p>
+                              ) : null}
+                              <a
+                                className="deploy-result-url"
+                                href={card.url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                              >
+                                {card.url}
+                              </a>
+                            </div>
+                            <div className="deploy-result-actions">
+                              {canRetry ? (
+                                <button
+                                  type="button"
+                                  className="viewer-action"
+                                  disabled={deployPhase === 'preparing-link'}
+                                  onClick={() => {
+                                    void retryDeploymentLink();
+                                  }}
+                                >
+                                  {deployPhase === 'preparing-link'
+                                    ? t('fileViewer.preparingPublicLink')
+                                    : t('fileViewer.retryLink')}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                className="viewer-action"
+                                onClick={() => {
+                                  void copyDeployLink(card.url);
+                                }}
+                              >
+                                <Icon name="copy" size={14} />
+                                <span>{copyDeployLabel(card.url)}</span>
+                              </button>
+                              <a
+                                className={`ghost-link ${isDisabled ? 'disabled' : ''}`}
+                                href={isDisabled ? undefined : card.url}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                aria-disabled={isDisabled}
+                              >
+                                <Icon name="upload" size={14} />
+                                {t('fileViewer.open')}
+                              </a>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               ) : null}
@@ -4637,14 +5100,10 @@ function HtmlViewer({
                 className="viewer-action primary"
                 disabled={deploying || savingDeployConfig || deployPhase !== 'idle'}
                 onClick={() => {
-                  void deployToVercel();
+                  void deployToSelectedProvider();
                 }}
               >
-                {deployPhase === 'deploying'
-                  ? t('fileViewer.deployingToVercel')
-                  : deployPhase === 'preparing-link'
-                    ? t('fileViewer.preparingPublicLink')
-                    : t('fileViewer.deployToVercel')}
+                {deployButtonLabel}
               </button>
             </div>
           </div>

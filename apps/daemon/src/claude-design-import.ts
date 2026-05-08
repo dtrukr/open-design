@@ -47,12 +47,22 @@ export async function importClaudeDesignZip(zipPath, projectDir) {
   const entryFile = chooseEntryFile(files.map((f) => f.path));
   if (!entryFile) throw new Error('zip does not contain an HTML file');
 
+  const dirCreates = new Map();
+  const ensureDir = (dir) => {
+    let pending = dirCreates.get(dir);
+    if (!pending) {
+      pending = mkdir(dir, { recursive: true });
+      dirCreates.set(dir, pending);
+    }
+    return pending;
+  };
+
   await mkdir(projectDir, { recursive: true });
-  for (const f of files) {
+  await Promise.all(files.map(async (f) => {
     const target = safeJoin(projectDir, f.path);
-    await mkdir(path.dirname(target), { recursive: true });
+    await ensureDir(path.dirname(target));
     await writeFile(target, f.body);
-  }
+  }));
 
   return {
     entryFile,

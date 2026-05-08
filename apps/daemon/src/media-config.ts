@@ -37,7 +37,7 @@
 // echo secrets back into the DOM.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import os from 'node:os';
 import path from 'node:path';
 import { MEDIA_PROVIDERS } from './media-models.js';
 import { expandHomePrefix } from './home-expansion.js';
@@ -74,6 +74,7 @@ const ENV_KEYS = {
   udio: ['OD_UDIO_API_KEY'],
   elevenlabs: ['OD_ELEVENLABS_API_KEY', 'ELEVENLABS_API_KEY'],
   fishaudio: ['OD_FISHAUDIO_API_KEY', 'FISH_AUDIO_API_KEY'],
+  tavily: ['OD_TAVILY_API_KEY', 'TAVILY_API_KEY'],
 };
 
 // Resolve an `OD_*_DIR` env override using the same semantics as
@@ -201,7 +202,7 @@ function tokenFromCodexAuth(data) {
 }
 
 async function resolveOpenAIOAuthCredential() {
-  const home = homedir();
+  const home = os.homedir();
   const hermesAuth = await readJsonIfPresent(
     path.join(home, '.hermes', 'auth.json'),
   );

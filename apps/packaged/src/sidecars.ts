@@ -32,7 +32,7 @@ import type { PackagedWebOutputMode } from "./config.js";
 import type { PackagedNamespacePaths } from "./paths.js";
 
 const require = createRequire(import.meta.url);
-const PACKAGED_CHILD_ENV_ALLOWLIST = ["HOME", "LANG", "LC_ALL", "LOGNAME", "TMPDIR", "USER"] as const;
+const PACKAGED_CHILD_ENV_ALLOWLIST = ["HOME", "LANG", "LC_ALL", "LOGNAME", "TMPDIR", "USER", "VP_HOME"] as const;
 
 function shouldForwardPackagedChildEnv(key: string, includeProviderSecrets = false): boolean {
   return (
@@ -173,7 +173,7 @@ function extractPort(url: string): string {
 // resolver and this PATH builder cannot drift again. See issue #442.
 const PACKAGED_POSIX_SYSTEM_BINS = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] as const;
 
-function resolvePackagedPathEnv(basePath = process.env.PATH ?? ""): string {
+export function resolvePackagedPathEnv(basePath = process.env.PATH ?? ""): string {
   const candidates = [
     ...basePath.split(delimiter),
     ...wellKnownUserToolchainBins(),
@@ -182,7 +182,10 @@ function resolvePackagedPathEnv(basePath = process.env.PATH ?? ""): string {
   return [...new Set(candidates.filter((entry) => entry.length > 0))].join(delimiter);
 }
 
-function resolvePackagedChildBaseEnv(env: NodeJS.ProcessEnv = process.env,includeProviderSecrets = false,): NodeJS.ProcessEnv {
+export function resolvePackagedChildBaseEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  includeProviderSecrets = false,
+): NodeJS.ProcessEnv {
   const baseEnv: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (value != null && value.length > 0 && shouldForwardPackagedChildEnv(key, includeProviderSecrets)) {
@@ -273,7 +276,10 @@ export async function startPackagedSidecars(
   paths: PackagedNamespacePaths,
   options: {
     appVersion: string | null;
+    daemonCliEntry: string | null;
+    daemonSidecarEntry: string | null;
     nodeCommand: string | null;
+    webSidecarEntry: string | null;
     webStandaloneRoot: string | null;
     webOutputMode: PackagedWebOutputMode;
   },
@@ -292,9 +298,10 @@ export async function startPackagedSidecars(
   try {
     const daemon = await spawnSidecarChild({
       app: APP_KEYS.DAEMON,
-      entryPath: resolveSidecarEntry("@open-design/daemon", "sidecar"),
+      entryPath: options.daemonSidecarEntry ?? resolveSidecarEntry("@open-design/daemon", "sidecar"),
       env: {
         [SIDECAR_ENV.DAEMON_PORT]: "0",
+        ...(options.daemonCliEntry == null ? {} : { [SIDECAR_ENV.DAEMON_CLI_PATH]: options.daemonCliEntry }),
         // Packaged daemon managed paths are deliberately delivered through
         // the sidecar launch environment. The daemon may keep its own default
         // fallback, but packaged runtime must not rely on path inference from
@@ -331,7 +338,7 @@ export async function startPackagedSidecars(
 
     const web = await spawnSidecarChild({
       app: APP_KEYS.WEB,
-      entryPath: resolveSidecarEntry("@open-design/web", "sidecar"),
+      entryPath: options.webSidecarEntry ?? resolveSidecarEntry("@open-design/web", "sidecar"),
       env: {
         [SIDECAR_ENV.DAEMON_PORT]: extractPort(daemonStatus.url),
         [SIDECAR_ENV.WEB_PORT]: "0",
