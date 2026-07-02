@@ -1,8 +1,8 @@
-import { execFile, spawn, type ChildProcess, type StdioOptions } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 export type CommandInvocation = {
@@ -61,11 +61,375 @@ export type HttpWaitOptions = {
   timeoutMs?: number;
 };
 
+export type AtomicCopyFileOptions = {
+  overwrite?: boolean;
+};
+
+export type AtomicCopyFileResult = {
+  bytesCopied: number;
+  replaced: boolean;
+};
+
+export type RemovePathBestEffortOptions = {
+  recursive?: boolean;
+};
+
+export type RemovePathBestEffortResult = {
+  error?: string;
+  removed: boolean;
+};
+
+export type SystemProxyCommandRunner = (command: string, args: string[]) => string;
+
+export type ResolveSystemProxyEnvOptions = {
+  platform?: NodeJS.Platform;
+  runCommand?: SystemProxyCommandRunner;
+};
+
 type WindowsProcessRecord = {
   CommandLine?: string | null;
   ParentProcessId?: number | string | null;
   ProcessId?: number | string | null;
 };
+
+const CANONICAL_PROXY_ENV_KEYS = new Map<string, "ALL_PROXY" | "HTTP_PROXY" | "HTTPS_PROXY" | "NODE_USE_ENV_PROXY" | "NO_PROXY">([
+  ["all_proxy", "ALL_PROXY"],
+  ["http_proxy", "HTTP_PROXY"],
+  ["https_proxy", "HTTPS_PROXY"],
+  ["node_use_env_proxy", "NODE_USE_ENV_PROXY"],
+  ["no_proxy", "NO_PROXY"],
+]);
+
+function defaultSystemProxyCommandRunner(command: string, args: string[]): string {
+  return execFileSync(command, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 2_000,
+    windowsHide: true,
+  });
+}
+
+function canonicalProxyEnvKey(
+  key: string,
+): "ALL_PROXY" | "HTTP_PROXY" | "HTTPS_PROXY" | "NODE_USE_ENV_PROXY" | "NO_PROXY" | null {
+  return CANONICAL_PROXY_ENV_KEYS.get(key.toLowerCase()) ?? null;
+}
+
+function deleteProxyEnvVariants(env: NodeJS.ProcessEnv, canonicalKey: string): void {
+  for (const existingKey of Object.keys(env)) {
+    if (existingKey.toLowerCase() === canonicalKey.toLowerCase()) delete env[existingKey];
+  }
+}
+
+function setCanonicalProxyEnvValue(
+  env: NodeJS.ProcessEnv,
+  canonicalKey: "ALL_PROXY" | "HTTP_PROXY" | "HTTPS_PROXY" | "NODE_USE_ENV_PROXY" | "NO_PROXY",
+  value: string,
+  platform: NodeJS.Platform,
+): void {
+  deleteProxyEnvVariants(env, canonicalKey);
+  if (canonicalKey === "NODE_USE_ENV_PROXY") {
+    env.NODE_USE_ENV_PROXY = value;
+    return;
+  }
+  addProxyEnvValue(env, canonicalKey, value, platform);
+}
+
+export function mergeProxyAwareEnv(
+  platform: NodeJS.Platform,
+  ...sources: Array<NodeJS.ProcessEnv | Record<string, string | undefined>>
+): NodeJS.ProcessEnv {
+  const merged: NodeJS.ProcessEnv = {};
+  for (const source of sources) {
+    const proxyEntries = new Map<
+      "ALL_PROXY" | "HTTP_PROXY" | "HTTPS_PROXY" | "NODE_USE_ENV_PROXY" | "NO_PROXY",
+      { preferLowercase: boolean; value: string }
+    >();
+    for (const [key, value] of Object.entries(source)) {
+      if (value == null) continue;
+      const canonicalKey = canonicalProxyEnvKey(key);
+      if (canonicalKey) {
+        const current = proxyEntries.get(canonicalKey);
+        const preferLowercase = key === key.toLowerCase();
+        if (!current || preferLowercase || !current.preferLowercase) {
+          proxyEntries.set(canonicalKey, { preferLowercase, value });
+        }
+        continue;
+      }
+      merged[key] = value;
+    }
+    for (const [canonicalKey, entry] of proxyEntries) {
+      setCanonicalProxyEnvValue(merged, canonicalKey, entry.value, platform);
+    }
+  }
+  if (hasProxyEndpointEnv(merged) && !hasCanonicalProxyEnv(merged, "NODE_USE_ENV_PROXY")) {
+    merged.NODE_USE_ENV_PROXY = "1";
+  }
+  return merged;
+}
+
+function hasCanonicalProxyEnv(
+  env: NodeJS.ProcessEnv,
+  canonicalKey: "ALL_PROXY" | "HTTP_PROXY" | "HTTPS_PROXY" | "NODE_USE_ENV_PROXY" | "NO_PROXY",
+): boolean {
+  return Object.keys(env).some((key) => key.toLowerCase() === canonicalKey.toLowerCase());
+}
+
+function hasProxyEndpointEnv(env: NodeJS.ProcessEnv): boolean {
+  return ["ALL_PROXY", "HTTP_PROXY", "HTTPS_PROXY"].some((key) => {
+    for (const [envKey, value] of Object.entries(env)) {
+      if (envKey.toLowerCase() === key.toLowerCase() && value?.trim()) return true;
+    }
+    return false;
+  });
+}
+
+function addProxyEnvValue(
+  env: NodeJS.ProcessEnv,
+  key: "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY" | "NO_PROXY",
+  value: string,
+  platform: NodeJS.Platform,
+): void {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  env[key] = trimmed;
+  if (platform !== "win32") env[key.toLowerCase()] = trimmed;
+}
+
+function normalizeBypassToken(token: string): string[] {
+  const trimmed = token.trim();
+  if (!trimmed) return [];
+  if (trimmed === "<local>") return ["<local>", "localhost", "127.0.0.1", "[::1]", ".local"];
+  if (trimmed === "::1") return ["[::1]"];
+  if (trimmed.startsWith("*.")) return [`.${trimmed.slice(2)}`];
+  return [trimmed];
+}
+
+function buildNoProxyValue(tokens: Iterable<string>): string | null {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const token of tokens) {
+    for (const normalized of normalizeBypassToken(token)) {
+      if (!seen.has(normalized)) {
+        seen.add(normalized);
+        values.push(normalized);
+      }
+    }
+  }
+  return values.length > 0 ? values.join(",") : null;
+}
+
+function preserveWildcardNoProxyValue(noProxy: string | null | undefined): string | undefined {
+  return noProxy?.split(",").some((token) => token.trim() === "*") ? "*" : undefined;
+}
+
+function normalizeProxyUrl(raw: string, scheme: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `${scheme}://${trimmed}`;
+}
+
+function bracketIpv6Authority(authority: string): string {
+  if (authority.startsWith("[") || !authority.includes(":")) return authority;
+  const portSeparatorIndex = authority.lastIndexOf(":");
+  if (portSeparatorIndex <= 0) return authority;
+  const host = authority.slice(0, portSeparatorIndex);
+  const port = authority.slice(portSeparatorIndex + 1);
+  if (!host.includes(":") || !/^\d+$/.test(port)) return authority;
+  return `[${host}]:${port}`;
+}
+
+function normalizeAuthorityProxyUrl(raw: string, scheme: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  return `${scheme}://${bracketIpv6Authority(trimmed)}`;
+}
+
+function normalizeHostPortProxyUrl(
+  host: string | undefined,
+  port: string | undefined,
+  scheme: string,
+): string | null {
+  const trimmedHost = host?.trim() ?? "";
+  const trimmedPort = port?.trim() ?? "";
+  if (!trimmedHost || !trimmedPort) return null;
+  const normalizedHost =
+    trimmedHost.includes(":") && !trimmedHost.startsWith("[") && !trimmedHost.endsWith("]")
+      ? `[${trimmedHost}]`
+      : trimmedHost;
+  return normalizeProxyUrl(`${normalizedHost}:${trimmedPort}`, scheme);
+}
+
+function finalizeSystemProxyEnv(
+  values: {
+    allProxy?: string | null;
+    httpProxy?: string | null;
+    httpsProxy?: string | null;
+    noProxy?: string | null;
+  },
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  const hasProxy = Boolean(values.httpProxy || values.httpsProxy || values.allProxy);
+  const noProxy = hasProxy
+    ? preserveWildcardNoProxyValue(values.noProxy) ??
+      buildNoProxyValue([
+        ...(values.noProxy ? values.noProxy.split(",") : []),
+        "localhost",
+        "127.0.0.1",
+        "[::1]",
+      ])
+    : null;
+  const env: NodeJS.ProcessEnv = {};
+  if (values.httpProxy) addProxyEnvValue(env, "HTTP_PROXY", values.httpProxy, platform);
+  if (values.httpsProxy) addProxyEnvValue(env, "HTTPS_PROXY", values.httpsProxy, platform);
+  if (values.allProxy) addProxyEnvValue(env, "ALL_PROXY", values.allProxy, platform);
+  if (noProxy) addProxyEnvValue(env, "NO_PROXY", noProxy, platform);
+  if (hasProxy) env.NODE_USE_ENV_PROXY = "1";
+  return env;
+}
+
+export function parseMacosScutilProxyOutput(
+  stdout: string,
+  platform: NodeJS.Platform = "darwin",
+): NodeJS.ProcessEnv {
+  const scalars = new Map<string, string>();
+  const exceptions: string[] = [];
+  let inExceptions = false;
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^ExceptionsList\s*:\s*<array>\s*\{$/.test(line)) {
+      inExceptions = true;
+      continue;
+    }
+    if (inExceptions) {
+      if (line === "}") {
+        inExceptions = false;
+        continue;
+      }
+      const match = line.match(/^\d+\s*:\s*(.+)$/);
+      if (match) exceptions.push(match[1].trim());
+      continue;
+    }
+    const match = line.match(/^([A-Za-z][A-Za-z0-9]*)\s*:\s*(.+)$/);
+    if (match) scalars.set(match[1], match[2].trim());
+  }
+
+  const httpProxy =
+    scalars.get("HTTPEnable") === "1"
+      ? normalizeHostPortProxyUrl(scalars.get("HTTPProxy"), scalars.get("HTTPPort"), "http")
+      : null;
+  const httpsProxy =
+    scalars.get("HTTPSEnable") === "1"
+      ? normalizeHostPortProxyUrl(scalars.get("HTTPSProxy"), scalars.get("HTTPSPort"), "http")
+      : null;
+  const allProxy =
+    scalars.get("SOCKSEnable") === "1"
+      ? normalizeHostPortProxyUrl(scalars.get("SOCKSProxy"), scalars.get("SOCKSPort"), "socks5")
+      : null;
+  return finalizeSystemProxyEnv(
+    {
+      allProxy,
+      httpProxy,
+      httpsProxy,
+      noProxy: buildNoProxyValue([
+        ...exceptions,
+        ...(scalars.get("ExcludeSimpleHostnames") === "1" ? ["<local>"] : []),
+      ]),
+    },
+    platform,
+  );
+}
+
+function parseRegistryValue(stdout: string, valueName: string): string | null {
+  const match = stdout.match(new RegExp(`^\\s*${valueName}\\s+REG_\\w+\\s+(.+)$`, "m"));
+  return match ? match[1].trim() : null;
+}
+
+export function parseWindowsInternetSettingsProxyOutput(
+  input: { proxyEnable: string; proxyOverride?: string; proxyServer?: string },
+  platform: NodeJS.Platform = "win32",
+): NodeJS.ProcessEnv {
+  const enabled = parseRegistryValue(input.proxyEnable, "ProxyEnable");
+  if (enabled == null || !/^(1|0x1)$/i.test(enabled)) return {};
+  const proxyServer = parseRegistryValue(input.proxyServer ?? "", "ProxyServer") ?? "";
+  const proxyOverride = parseRegistryValue(input.proxyOverride ?? "", "ProxyOverride") ?? "";
+  if (!proxyServer.trim()) return {};
+
+  let httpProxy: string | null = null;
+  let httpsProxy: string | null = null;
+  let allProxy: string | null = null;
+  if (proxyServer.includes("=")) {
+    for (const segment of proxyServer.split(";")) {
+      const [kind, rawValue] = segment.split("=", 2);
+      const value = rawValue?.trim();
+      if (!kind || !value) continue;
+      const lowerKind = kind.trim().toLowerCase();
+      if (lowerKind === "http") httpProxy = normalizeAuthorityProxyUrl(value, "http");
+      else if (lowerKind === "https") httpsProxy = normalizeAuthorityProxyUrl(value, "http");
+      else if (lowerKind === "socks") allProxy = normalizeAuthorityProxyUrl(value, "socks5");
+    }
+  } else {
+    const shared = normalizeAuthorityProxyUrl(proxyServer, "http");
+    httpProxy = shared;
+    httpsProxy = shared;
+  }
+  return finalizeSystemProxyEnv(
+    {
+      allProxy,
+      httpProxy,
+      httpsProxy,
+      noProxy: buildNoProxyValue(proxyOverride.split(/[;,]/)),
+    },
+    platform,
+  );
+}
+
+export function resolveSystemProxyEnv(options: ResolveSystemProxyEnvOptions = {}): NodeJS.ProcessEnv {
+  const platform = options.platform ?? process.platform;
+  const runCommand = options.runCommand ?? defaultSystemProxyCommandRunner;
+  const tryRun = (command: string, args: string[]): string => {
+    try {
+      return runCommand(command, args);
+    } catch {
+      return "";
+    }
+  };
+  try {
+    if (platform === "darwin") {
+      return parseMacosScutilProxyOutput(tryRun("scutil", ["--proxy"]), platform);
+    }
+    if (platform === "win32") {
+      return parseWindowsInternetSettingsProxyOutput(
+        {
+          proxyEnable: tryRun("reg", [
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            "/v",
+            "ProxyEnable",
+          ]),
+          proxyOverride: tryRun("reg", [
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            "/v",
+            "ProxyOverride",
+          ]),
+          proxyServer: tryRun("reg", [
+            "query",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            "/v",
+            "ProxyServer",
+          ]),
+        },
+        platform,
+      );
+    }
+  } catch {
+    return {};
+  }
+  return {};
+}
 
 export function createProcessStampArgs<TStamp extends ProcessStampShape>(
   stamp: TStamp,
@@ -150,6 +514,72 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+export function pathContains(root: string, target: string): boolean {
+  const resolvedRoot = resolve(root);
+  const resolvedTarget = resolve(target);
+  const rel = relative(resolvedRoot, resolvedTarget);
+  return rel === "" || (rel.length > 0 && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function destinationExistsError(destinationPath: string): NodeJS.ErrnoException {
+  const error = new Error(`destination already exists: ${destinationPath}`) as NodeJS.ErrnoException;
+  error.code = "EEXIST";
+  return error;
+}
+
+export async function atomicCopyFile(
+  sourcePath: string,
+  destinationPath: string,
+  options: AtomicCopyFileOptions = {},
+): Promise<AtomicCopyFileResult> {
+  const source = resolve(sourcePath);
+  const destination = resolve(destinationPath);
+  if (source === destination) {
+    const entry = await stat(destination);
+    if (!entry.isFile()) throw new Error(`destination is not a file: ${destination}`);
+    return { bytesCopied: entry.size, replaced: true };
+  }
+
+  const destinationDir = dirname(destination);
+  await mkdir(destinationDir, { recursive: true });
+  const existing = await stat(destination).catch((error: unknown) => {
+    if (errorCode(error) === "ENOENT") return null;
+    throw error;
+  });
+  if (existing != null && options.overwrite !== true) {
+    throw destinationExistsError(destination);
+  }
+
+  const tempPath = join(
+    destinationDir,
+    `.${basename(destination)}.${process.pid}.${Date.now().toString(36)}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  try {
+    await copyFile(source, tempPath);
+    if (options.overwrite === true) {
+      await rm(destination, { force: true });
+    }
+    await rename(tempPath, destination);
+    const copied = await stat(destination);
+    return { bytesCopied: copied.size, replaced: existing != null };
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+export async function removePathBestEffort(
+  path: string,
+  options: RemovePathBestEffortOptions = {},
+): Promise<RemovePathBestEffortResult> {
+  try {
+    await rm(path, { force: true, recursive: options.recursive ?? true });
+    return { removed: true };
+  } catch (error) {
+    return { error: errorMessage(error), removed: false };
+  }
+}
+
 // `cmd.exe /s /c "..."` runs percent-expansion on the inner line *regardless*
 // of whether the `%name%` pair sits inside a `"..."` quoted segment, so a
 // `.cmd` / `.bat` shim spawn with an attacker-influenced argv (e.g. an LLM
@@ -193,6 +623,8 @@ function buildCmdShimInvocation(command: string, args: string[], env: NodeJS.Pro
   };
 }
 
+const nodeLoadablePackageManagerExtensions = new Set([".js", ".cjs", ".mjs"]);
+
 export function createCommandInvocation({ args = [], command, env = process.env }: CommandInvocationRequest): CommandInvocation {
   if (process.platform === "win32" && /\.(bat|cmd)$/i.test(command)) {
     return buildCmdShimInvocation(command, args, env);
@@ -202,11 +634,22 @@ export function createCommandInvocation({ args = [], command, env = process.env 
 
 export function createPackageManagerInvocation(args: string[], env: NodeJS.ProcessEnv = process.env): CommandInvocation {
   const execPath = env.npm_execpath;
-  if (execPath) return { args: [execPath, ...args], command: process.execPath };
-  if (process.platform === "win32") {
-    return buildCmdShimInvocation("pnpm", args, env);
+  if (execPath) {
+    if (nodeLoadablePackageManagerExtensions.has(extname(execPath).toLowerCase())) {
+      return { args: [execPath, ...args], command: process.execPath };
+    }
+    return createCommandInvocation({ args, command: execPath, env });
   }
-  return { args, command: "pnpm" };
+  // No `npm_execpath` — common on Corepack-only setups (e.g. native Windows
+  // PowerShell where `corepack pnpm` works but no standalone `pnpm` lives on
+  // PATH). Route nested invocations through `corepack pnpm …` instead of
+  // assuming a global `pnpm` binary: `corepack pnpm …` runs the repo-pinned
+  // package manager out of the box, while a bare `pnpm` only resolves when a
+  // separate global install or a `corepack enable` shim is present. See #2438.
+  if (process.platform === "win32") {
+    return buildCmdShimInvocation("corepack", ["pnpm", ...args], env);
+  }
+  return { args: ["pnpm", ...args], command: "corepack" };
 }
 
 function createLoggedStdio(logFd?: number | null): StdioOptions {
@@ -483,12 +926,31 @@ export function wellKnownUserToolchainBins(
   if (typeof npmPrefixRaw === "string") {
     const npmPrefix = npmPrefixRaw.trim();
     if (npmPrefix.length > 0) {
+      // Unix: npm global binaries live in <prefix>/bin. Always add it as a
+      // search-path candidate — existence is irrelevant for a PATH directory,
+      // and this preserves the long-standing helper contract.
       dirs.push(join(npmPrefix, "bin"));
+      // Windows: npm installs global binaries directly into the prefix root
+      // (there is no /bin subdirectory), so add the root as well. Additive —
+      // the <prefix>/bin entry above is left untouched for cross-platform
+      // parity.
+      if (process.platform === "win32") {
+        dirs.push(npmPrefix);
+      }
     }
+  }
+  // Windows: %APPDATA%\npm is npm's default global prefix. NPM_CONFIG_PREFIX /
+  // npm_config_prefix are npm-internal vars that are usually absent in Electron
+  // child-process environments, so the block above no-ops for most Windows
+  // users. Add the default location unconditionally — consistent with the
+  // conventional dirs below, which are also added without an existence check.
+  if (process.platform === "win32") {
+    dirs.push(join(home, "AppData", "Roaming", "npm"));
   }
   dirs.push(
     join(home, ".local", "bin"),
     join(home, ".vite-plus", "bin"),
+    join(home, ".kimi-code", "bin"),
     join(home, ".opencode", "bin"),
     join(home, ".bun", "bin"),
     join(home, ".volta", "bin"),
@@ -504,16 +966,51 @@ export function wellKnownUserToolchainBins(
     // issue #442.
     join(home, ".npm-global", "bin"),
     join(home, ".npm-packages", "bin"),
+    // Other common user-level toolchains that install CLI shims outside the
+    // Node ecosystem but still ship agent CLIs (or their dependencies):
+    // Deno's install root, Go's default GOBIN, and pyenv's shim dir. All are
+    // best-effort — a missing dir contributes nothing.
+    join(home, ".deno", "bin"),
+    join(home, "go", "bin"),
+    join(home, ".pyenv", "shims"),
   );
+
+  // Windows-only user install roots that GUI launches miss. Scoop drops
+  // shims under ~/scoop/shims, and npm's global prefix on Windows defaults
+  // to %APPDATA%\npm rather than a `bin` subdir.
+  if (process.platform === "win32") {
+    dirs.push(join(home, "scoop", "shims"));
+    const appData = typeof env.APPDATA === "string" ? env.APPDATA.trim() : "";
+    if (appData.length > 0) {
+      dirs.push(join(appData, "npm"));
+    }
+  }
+
+  // Mise shims: makes every tool installed with `mise install` visible to
+  // GUI-launched daemons even when the process inherits a stripped PATH.
+  // Respect MISE_DATA_DIR (the official way to relocate the whole mise tree).
+  // We only fall back to the legacy ~/.mise/shims path when no explicit
+  // MISE_DATA_DIR override is provided.
+  const miseDataOverride = resolveUserScopedHome(env.MISE_DATA_DIR, home);
+  const miseData = miseDataOverride || join(home, ".local", "share", "mise");
+  dirs.push(join(miseData, "shims"));
+
+  if (!miseDataOverride) {
+    dirs.push(join(home, ".mise", "shims"));
+  }
+
   if (includeSystemBins) {
     dirs.push("/opt/homebrew/bin", "/usr/local/bin");
   }
   // Per-version Node toolchains: scan the install root and surface every
   // version directory's bin folder. Best-effort — missing roots simply
   // contribute nothing.
-  for (const installRoot of [
+  // When MISE_DATA_DIR is set we use the same root for consistency with shims.
+  const miseInstalls = join(miseData, "installs");
+  dirs.push(...existingMiseNpmPackageBinDirs(miseInstalls));
+  const nodeInstallRoots: Array<{ root: string; segments: string[] }> = [
     {
-      root: join(home, ".local", "share", "mise", "installs", "node"),
+      root: join(miseInstalls, "node"),
       segments: ["bin"],
     },
     {
@@ -524,12 +1021,49 @@ export function wellKnownUserToolchainBins(
       root: join(home, ".local", "share", "fnm", "node-versions"),
       segments: ["installation", "bin"],
     },
-  ]) {
+    {
+      root: join(home, ".fnm", "node-versions"),
+      segments: ["installation", "bin"],
+    },
+  ];
+  // Windows fnm keeps Node installs under <fnm-root>\node-versions\<ver>\
+  // installation, with node.exe — and any `npm i -g`'d CLI shim such as
+  // codex.cmd — directly in `installation` (no POSIX-style `bin` subdir).
+  // The fnm root is %APPDATA%\fnm or %LOCALAPPDATA%\fnm depending on the
+  // install, and `FNM_DIR` overrides both. A GUI-launched packaged app
+  // inherits a stripped PATH and reads no shell rc, so without an explicit
+  // probe fnm-managed Node — and every agent CLI it runs — is silently
+  // undetected on Windows. See issues #3517 and #3062.
+  if (process.platform === "win32") {
+    const fnmDirOverride = typeof env.FNM_DIR === "string" ? env.FNM_DIR.trim() : "";
+    const fnmRoots: string[] = [];
+    if (fnmDirOverride.length > 0) {
+      fnmRoots.push(fnmDirOverride);
+    } else {
+      for (const base of [env.LOCALAPPDATA, env.APPDATA]) {
+        const trimmed = typeof base === "string" ? base.trim() : "";
+        if (trimmed.length > 0) fnmRoots.push(join(trimmed, "fnm"));
+      }
+    }
+    for (const fnmRoot of fnmRoots) {
+      nodeInstallRoots.push({ root: join(fnmRoot, "node-versions"), segments: ["installation"] });
+    }
+  }
+  for (const installRoot of nodeInstallRoots) {
     for (const dir of existingChildBinDirs(installRoot.root, installRoot.segments)) {
       dirs.push(dir);
     }
   }
   return dirs;
+}
+
+function existingMiseNpmPackageBinDirs(root: string): string[] {
+  const out: string[] = [];
+  for (const packageName of ["npm-openai-codex"]) {
+    const packageRoot = join(root, packageName);
+    out.push(...existingChildBinDirs(packageRoot, ["bin"]));
+  }
+  return out;
 }
 
 function existingChildBinDirs(root: string, segments: string[]): string[] {
@@ -540,10 +1074,38 @@ function existingChildBinDirs(root: string, segments: string[]): string[] {
   } catch {
     return out;
   }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+  for (const entry of sortVersionedDirEntries(entries)) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     const candidate = join(root, entry.name, ...segments);
     if (existsSync(candidate)) out.push(candidate);
   }
   return out;
+}
+
+type SemverParts = [major: number, minor: number, patch: number];
+
+function sortVersionedDirEntries(entries: import("node:fs").Dirent<string>[]): import("node:fs").Dirent<string>[] {
+  return [...entries].sort((left, right) => compareVersionLikeDirNames(left.name, right.name));
+}
+
+function compareVersionLikeDirNames(left: string, right: string): number {
+  const leftSemver = parseVersionLikeDirName(left);
+  const rightSemver = parseVersionLikeDirName(right);
+  if (leftSemver && rightSemver) {
+    for (let index = 0; index < leftSemver.length; index += 1) {
+      const difference = rightSemver[index] - leftSemver[index];
+      if (difference !== 0) return difference;
+    }
+  } else if (leftSemver) {
+    return -1;
+  } else if (rightSemver) {
+    return 1;
+  }
+  return left.localeCompare(right);
+}
+
+function parseVersionLikeDirName(name: string): SemverParts | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(name);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
 }

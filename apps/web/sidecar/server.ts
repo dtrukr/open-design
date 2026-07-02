@@ -8,11 +8,11 @@ import {
 } from "node:http";
 import { request as createHttpsRequest } from "node:https";
 import { existsSync, readFileSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { createServer as createTcpServer, type AddressInfo, type Server as TcpServer } from "node:net";
-import { dirname, isAbsolute, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { createConnection, createServer as createTcpServer, type AddressInfo, type Server as TcpServer } from "node:net";
+import { dirname, isAbsolute, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   SIDECAR_ENV,
@@ -42,12 +42,19 @@ const WEB_STANDALONE_ROOT_ENV = "OD_WEB_STANDALONE_ROOT";
 const STANDALONE_PARENT_PID_ENV = "OD_STANDALONE_PARENT_PID";
 const STANDALONE_STARTUP_TIMEOUT_ENV = "OD_STANDALONE_STARTUP_TIMEOUT_MS";
 const SHUTDOWN_TIMEOUT_MS = 3000;
+const STANDALONE_READINESS_POLL_MS = 150;
+const STANDALONE_TCP_READINESS_GRACE_MS = STANDALONE_READINESS_POLL_MS;
 const require = createRequire(import.meta.url);
 
 type NextApp = {
   close?: () => Promise<void>;
   getRequestHandler(): (request: IncomingMessage, response: ServerResponse) => Promise<void>;
   prepare(): Promise<void>;
+};
+
+type NextBundlerOptions = {
+  turbopack?: boolean;
+  webpack?: boolean;
 };
 
 type StandaloneBackend = {
@@ -57,9 +64,16 @@ type StandaloneBackend = {
   stop(): Promise<void>;
 };
 
-function createNextApp(options: { dev: boolean; dir: string }): NextApp {
-  const createNextServer = require("next") as (nextOptions: { dev: boolean; dir: string }) => NextApp;
+function createNextApp(options: { dev: boolean; dir: string } & NextBundlerOptions): NextApp {
+  const createNextServer = require("next") as (nextOptions: { dev: boolean; dir: string } & NextBundlerOptions) => NextApp;
   return createNextServer(options);
+}
+
+export function resolveNextBundlerOptions(isDev: boolean): NextBundlerOptions {
+  if (!isDev) return {};
+  const configured = (process.env.OD_WEB_DEV_BUNDLER ?? "webpack").trim().toLowerCase();
+  if (configured === "turbopack" || configured === "turbo") return { turbopack: true };
+  return { webpack: true };
 }
 
 export type WebSidecarHandle = {
@@ -242,6 +256,7 @@ function resolveHttpProxyTarget(
 export function normalizeDaemonProxyOriginHeader(options: {
   daemonOrigin: string;
   origin: string | undefined;
+  requestHost?: string | string[];
   webPort: number;
 }): string | undefined {
   if (options.origin == null || options.origin.length === 0) return options.origin;
@@ -252,7 +267,137 @@ export function normalizeDaemonProxyOriginHeader(options: {
     schemes.flatMap((scheme) => loopbackHosts.map((host) => `${scheme}://${host}:${options.webPort}`)),
   );
 
-  return allowedWebOrigins.has(options.origin) ? options.daemonOrigin : options.origin;
+  if (allowedWebOrigins.has(options.origin)) return options.daemonOrigin;
+
+  const parsedOrigin = parseHttpOrigin(options.origin);
+  if (
+    parsedOrigin != null &&
+    isSameBrowserHostOrigin({
+      origin: parsedOrigin,
+      requestHost: options.requestHost,
+      webPort: options.webPort,
+    })
+  ) {
+    return options.daemonOrigin;
+  }
+
+  return options.origin;
+}
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function parseHostHeader(value: string | string[] | undefined): URL | null {
+  const raw = firstHeaderValue(value)?.trim();
+  if (raw == null || raw.length === 0) return null;
+  try {
+    return new URL(`http://${raw}`);
+  } catch {
+    return null;
+  }
+}
+
+function parseHttpOrigin(value: string): URL | null {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseAllowedDevHost(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  try {
+    return new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    try {
+      return new URL(`http://${trimmed}`).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  }
+}
+
+function configuredAllowedDevHosts(): Set<string> {
+  return new Set(
+    (process.env.OD_ALLOWED_DEV_ORIGINS ?? "")
+      .split(",")
+      .map(parseAllowedDevHost)
+      .filter((host): host is string => host != null),
+  );
+}
+
+function isAllowedDevHost(hostname: string, allowedHosts: Set<string>): boolean {
+  const host = hostname.toLowerCase();
+  if (allowedHosts.has(host)) return true;
+
+  for (const allowedHost of allowedHosts) {
+    if (!allowedHost.startsWith("*.")) continue;
+    const suffix = allowedHost.slice(1);
+    if (host.endsWith(suffix) && host.length > suffix.length) return true;
+  }
+
+  return false;
+}
+
+function parseIpv4(value: string): [number, number, number, number] | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) return null;
+  if (!parts.every((part) => /^\d+$/.test(part))) return null;
+  const octets = parts.map((part) => Number(part));
+  if (!octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255)) return null;
+  return octets as [number, number, number, number];
+}
+
+function isPrivateLanIpv4(value: string): boolean {
+  const octets = parseIpv4(value);
+  if (octets == null) return false;
+  const [a, b] = octets;
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
+}
+
+function isLoopbackOrPrivateLanHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    isPrivateLanIpv4(host)
+  );
+}
+
+function defaultPortForProtocol(protocol: string): string {
+  return protocol === "https:" ? "443" : "80";
+}
+
+function isSameBrowserHostOrigin(options: {
+  origin: URL;
+  requestHost?: string | string[];
+  webPort: number;
+}): boolean {
+  const requestHost = parseHostHeader(options.requestHost);
+  if (requestHost == null) return false;
+
+  const originPort = options.origin.port || defaultPortForProtocol(options.origin.protocol);
+  const requestPort = requestHost.port || "80";
+  if (originPort !== String(options.webPort) || requestPort !== originPort) return false;
+  if (requestHost.hostname.toLowerCase() !== options.origin.hostname.toLowerCase()) return false;
+
+  const allowedDevHosts = configuredAllowedDevHosts();
+  const originHost = options.origin.hostname.toLowerCase();
+  return isLoopbackOrPrivateLanHost(originHost) || isAllowedDevHost(originHost, allowedDevHosts);
 }
 
 async function proxyHttpRequest(
@@ -267,6 +412,7 @@ async function proxyHttpRequest(
     const origin = normalizeDaemonProxyOriginHeader({
       daemonOrigin: target.origin,
       origin: typeof request.headers.origin === "string" ? request.headers.origin : undefined,
+      requestHost: request.headers.host,
       webPort: options.daemonWebPort,
     });
     if (origin == null || origin.length === 0) {
@@ -377,7 +523,15 @@ async function stopStandaloneChild(child: ChildProcess): Promise<void> {
   }
 }
 
-async function probeStandaloneBackend(origin: string): Promise<boolean> {
+type StandaloneBackendProbeResult = "http" | "tcp" | null;
+
+async function probeStandaloneBackend(origin: string): Promise<StandaloneBackendProbeResult> {
+  if (await probeStandaloneBackendPort(origin)) return "tcp";
+  if (await probeStandaloneBackendHttp(origin)) return "http";
+  return null;
+}
+
+async function probeStandaloneBackendHttp(origin: string): Promise<boolean> {
   return await new Promise<boolean>((resolveProbe) => {
     const request = createHttpRequest(new URL("/", origin), { method: "HEAD", timeout: 800 }, (response) => {
       response.resume();
@@ -392,6 +546,64 @@ async function probeStandaloneBackend(origin: string): Promise<boolean> {
   });
 }
 
+async function probeStandaloneBackendPort(origin: string): Promise<boolean> {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+  const port = Number(parsed.port || defaultPortForProtocol(parsed.protocol));
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return false;
+  const host = parsed.hostname.replace(/^\[(.*)\]$/, "$1");
+
+  return await new Promise<boolean>((resolveProbe) => {
+    const socket = createConnection({ host, port });
+    let settled = false;
+    const settle = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolveProbe(ready);
+    };
+    socket.setTimeout(800, () => settle(false));
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false));
+  });
+}
+
+function createStandaloneChildExitError(child: ChildProcess, startedAt: number): Error {
+  const elapsedMs = Date.now() - startedAt;
+  const likelyPortRace = elapsedMs <= 200;
+  return new Error(
+    `standalone Next.js server exited before readiness after ${elapsedMs}ms: code=${child.exitCode} signal=${child.signalCode}`
+    + (likelyPortRace
+      ? "; the reserved startup port may have been claimed before the child process bound it, retry the launch"
+      : ""),
+  );
+}
+
+function throwIfStandaloneChildExited(child: ChildProcess, startedAt: number): void {
+  if (child.exitCode == null && child.signalCode == null) return;
+  throw createStandaloneChildExitError(child, startedAt);
+}
+
+async function waitForStandaloneTcpReadinessGrace(child: ChildProcess): Promise<void> {
+  if (child.exitCode != null || child.signalCode != null) return;
+
+  await new Promise<void>((resolveWait) => {
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = () => {
+      if (timeout != null) clearTimeout(timeout);
+      child.off("exit", finish);
+      resolveWait();
+    };
+    timeout = setTimeout(finish, STANDALONE_TCP_READINESS_GRACE_MS);
+    timeout.unref();
+    child.once("exit", finish);
+  });
+}
+
 async function waitForStandaloneBackendReady(
   child: ChildProcess,
   origin: string,
@@ -400,21 +612,91 @@ async function waitForStandaloneBackendReady(
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (child.exitCode != null || child.signalCode != null) {
-      const elapsedMs = Date.now() - startedAt;
-      const likelyPortRace = elapsedMs <= 200;
-      throw new Error(
-        `standalone Next.js server exited before readiness after ${elapsedMs}ms: code=${child.exitCode} signal=${child.signalCode}`
-        + (likelyPortRace
-          ? "; the reserved startup port may have been claimed before the child process bound it, retry the launch"
-          : ""),
-      );
+    throwIfStandaloneChildExited(child, startedAt);
+    const readiness = await probeStandaloneBackend(origin);
+    if (readiness != null) {
+      if (readiness === "tcp") {
+        await waitForStandaloneTcpReadinessGrace(child);
+      }
+      throwIfStandaloneChildExited(child, startedAt);
+      return;
     }
-    if (await probeStandaloneBackend(origin)) return;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 150));
+    await new Promise((resolveWait) => setTimeout(resolveWait, STANDALONE_READINESS_POLL_MS));
   }
 
   throw new Error(`timed out after ${timeoutMs}ms waiting for standalone Next.js server at ${origin}; override with ${STANDALONE_STARTUP_TIMEOUT_ENV}`);
+}
+
+async function waitForInProcessStandaloneBackendReady(
+  origin: string,
+  timeoutMs = resolveStandaloneStartupTimeoutMs(),
+): Promise<void> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await probeStandaloneBackend(origin)) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, STANDALONE_READINESS_POLL_MS));
+  }
+
+  throw new Error(`timed out after ${timeoutMs}ms waiting for in-process standalone Next.js server at ${origin}; override with ${STANDALONE_STARTUP_TIMEOUT_ENV}`);
+}
+
+function shouldStartStandaloneBackendInProcess(): boolean {
+  return process.env.ELECTRON_RUN_AS_NODE === "1" && process.versions.electron != null;
+}
+
+async function startStandaloneBackendInProcess(entryPath: string, port: number, origin: string): Promise<StandaloneBackend> {
+  Object.assign(process.env, createStandaloneBackendEnv({ port }));
+  console.log(`[open-design web] starting in-process standalone Next.js server from ${entryPath}`);
+  const restoreChdir = await installInProcessStandaloneChdirAlias(dirname(entryPath));
+  try {
+    await import(pathToFileURL(entryPath).href);
+  } finally {
+    restoreChdir();
+  }
+  await waitForInProcessStandaloneBackendReady(origin);
+
+  return {
+    exitReason() {
+      return null;
+    },
+    isRunning() {
+      return true;
+    },
+    origin,
+    async stop() {
+      // The standalone server shares this web sidecar process in packaged
+      // Electron-as-Node mode. Process shutdown is the close boundary.
+    },
+  };
+}
+
+async function installInProcessStandaloneChdirAlias(aliasRoot: string): Promise<() => void> {
+  if (process.platform !== "win32") return () => {};
+
+  const realRoot = await realpath(aliasRoot).catch(() => null);
+  if (realRoot == null || normalizeWindowsPath(realRoot) === normalizeWindowsPath(aliasRoot)) return () => {};
+
+  const originalChdir = process.chdir.bind(process);
+  process.chdir = ((directory: string): void => {
+    const mapped = mapWindowsPathIntoAlias(directory, realRoot, aliasRoot);
+    originalChdir(mapped ?? directory);
+  }) as typeof process.chdir;
+
+  return () => {
+    process.chdir = originalChdir as typeof process.chdir;
+  };
+}
+
+function mapWindowsPathIntoAlias(candidate: string, realRoot: string, aliasRoot: string): string | null {
+  const normalizedCandidate = normalizeWindowsPath(candidate);
+  const normalizedRealRoot = normalizeWindowsPath(realRoot);
+  if (normalizedCandidate !== normalizedRealRoot && !normalizedCandidate.startsWith(`${normalizedRealRoot}\\`)) return null;
+  return join(aliasRoot, relative(realRoot, candidate));
+}
+
+function normalizeWindowsPath(path: string): string {
+  return path.replaceAll("/", "\\").replace(/[\\]+$/, "").toLowerCase();
 }
 
 async function startStandaloneBackend(webRoot: string | null): Promise<StandaloneBackend> {
@@ -429,6 +711,10 @@ async function startStandaloneBackend(webRoot: string | null): Promise<Standalon
 
   const port = await reserveTcpPort(STANDALONE_BACKEND_HOST);
   const origin = resolveStandaloneBackendOrigin(port);
+  if (shouldStartStandaloneBackendInProcess()) {
+    return await startStandaloneBackendInProcess(entryPath, port, origin);
+  }
+
   console.log(`[open-design web] starting standalone Next.js server from ${entryPath}`);
   const child = spawn(process.execPath, createStandaloneServerArgs(entryPath), {
     cwd: dirname(entryPath),
@@ -618,7 +904,8 @@ async function startRegularNextSidecar(
   runtime: SidecarRuntimeContext<SidecarStamp>,
   webRoot: string,
 ): Promise<WebSidecarHandle> {
-  const app = createNextApp({ dev: process.env.OD_WEB_PROD !== "1" && runtime.mode === "dev", dir: webRoot });
+  const dev = process.env.OD_WEB_PROD !== "1" && runtime.mode === "dev";
+  const app = createNextApp({ dev, dir: webRoot, ...resolveNextBundlerOptions(dev) });
   await prepareNextApp(app, webRoot);
 
   const daemonOrigin = resolveDaemonOrigin();

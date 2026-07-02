@@ -74,4 +74,15 @@ describe('app version helpers', () => {
       env: {},
     }).channel).toBe('beta');
   });
+
+  it('infers prerelease and preview release channels from app versions', () => {
+    expect(resolveAppVersionInfo({
+      packageMetadata: { version: '0.8.0-prerelease.2' },
+      env: {},
+    }).channel).toBe('prerelease');
+    expect(resolveAppVersionInfo({
+      packageMetadata: { version: '0.8.0-preview.1' },
+      env: {},
+    }).channel).toBe('preview');
+  });
 });

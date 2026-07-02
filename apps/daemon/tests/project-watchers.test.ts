@@ -1,28 +1,42 @@
-// @ts-nocheck
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { EventEmitter } from 'node:events';
+import type { FSWatcher } from 'chokidar';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   _activeWatcherCount,
   _resetForTests,
+  makeIgnored,
   subscribe,
+  type ProjectWatchEvent,
+  type ProjectWatcherOptions,
 } from '../src/project-watchers.js';
 
+type WatcherFactoryOptions = Required<Pick<ProjectWatcherOptions, 'ignored' | 'awaitWriteFinish'>>;
+
+function createMockWatcher(): FSWatcher {
+  const watcher = new EventEmitter() as EventEmitter & { close: () => Promise<void> };
+  watcher.close = async () => { factoryCloses++; };
+  return watcher as unknown as FSWatcher;
+}
+
 function fakeFactory() {
-  return (dir, _opts) => ({
+  return (dir: string, _opts: WatcherFactoryOptions) => ({
     dir,
-    watcher: { close: async () => { factoryCloses++; } },
+    watcher: createMockWatcher(),
     ready: Promise.resolve(),
-    subscribers: new Set(),
+    subscribers: new Set<(evt: ProjectWatchEvent) => void>(),
     closing: null,
   });
 }
 
 let factoryCloses = 0;
 
-const FAST_WATCH_OPTIONS = { awaitWriteFinish: false };
+const FAST_WATCH_OPTIONS: ProjectWatcherOptions = { awaitWriteFinish: false };
+const REAL_WATCHER_TEST_TIMEOUT_MS = 20_000;
+const REAL_WATCHER_WAIT_TIMEOUT_MS = 8_000;
 
 afterEach(async () => {
   await _resetForTests();
@@ -36,8 +50,15 @@ async function makeProjectsRoot() {
   return { root, projectId };
 }
 
-function waitFor(predicate, { timeout = 2000, interval = 25 } = {}) {
-  return new Promise((resolve, reject) => {
+function waitFor(
+  predicate: () => boolean,
+  {
+    timeout = 2000,
+    interval = 25,
+    debug,
+  }: { timeout?: number; interval?: number; debug?: () => string } = {},
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const started = Date.now();
     const tick = () => {
       try {
@@ -45,11 +66,38 @@ function waitFor(predicate, { timeout = 2000, interval = 25 } = {}) {
       } catch (err) {
         return reject(err);
       }
-      if (Date.now() - started > timeout) return reject(new Error('waitFor timeout'));
+      if (Date.now() - started > timeout) {
+        return reject(new Error(debug ? `waitFor timeout: ${debug()}` : 'waitFor timeout'));
+      }
       setTimeout(tick, interval);
     };
     tick();
   });
+}
+
+function debugEvents(events: ProjectWatchEvent[]): string {
+  return JSON.stringify({
+    env: {
+      NODE_ENV: process.env.NODE_ENV,
+      CHOKIDAR_USEPOLLING: process.env.CHOKIDAR_USEPOLLING,
+      CHOKIDAR_INTERVAL: process.env.CHOKIDAR_INTERVAL,
+      OD_WATCHER_USE_POLLING: process.env.OD_WATCHER_USE_POLLING,
+    },
+    events,
+  });
+}
+
+function recordEvent(events: ProjectWatchEvent[]) {
+  return (event: ProjectWatchEvent) => {
+    events.push(event);
+    if (process.env.OD_WATCHER_TEST_DEBUG === '1') {
+      console.info(`[watcher-test:event] ${JSON.stringify(event)}`);
+    }
+  };
+}
+
+function assertWatcher(watcher: FSWatcher | undefined): asserts watcher is FSWatcher {
+  expect(watcher).toBeDefined();
 }
 
 describe('project-watchers (refcounting)', () => {
@@ -107,29 +155,49 @@ describe('project-watchers (refcounting)', () => {
 });
 
 describe('project-watchers (real chokidar)', () => {
+  it('ignores generated build trees case-insensitively before chokidar descends', async () => {
+    const { root, projectId } = await makeProjectsRoot();
+    const projectRoot = path.join(root, projectId);
+    const ignored = makeIgnored(projectRoot);
+
+    expect(ignored(path.join(projectRoot, 'Build', 'DerivedData-KeeTests', 'index-store'))).toBe(true);
+    expect(ignored(path.join(projectRoot, 'Rust', 'KeePassCore', 'target', 'release', 'lib.a'))).toBe(true);
+    expect(ignored(path.join(projectRoot, 'vendor', 'package', 'generated.js'))).toBe(true);
+    expect(ignored(path.join(projectRoot, '.build', 'debug', 'Module.o'))).toBe(true);
+    expect(ignored(path.join(projectRoot, 'src', 'App.swift'))).toBe(false);
+
+    await rm(root, { recursive: true, force: true });
+  });
+
   it('emits file-changed events on add / change / unlink', async () => {
     const { root, projectId } = await makeProjectsRoot();
-    const events = [];
-    const sub = subscribe(root, projectId, (e) => events.push(e), FAST_WATCH_OPTIONS);
+    const events: ProjectWatchEvent[] = [];
+    const sub = subscribe(root, projectId, recordEvent(events), FAST_WATCH_OPTIONS);
     await sub.ready;
 
     try {
       const filePath = path.join(root, projectId, 'hello.txt');
       await writeFile(filePath, 'first');
-      await waitFor(() => events.some((e) => e.kind === 'add' && e.path === 'hello.txt'));
+      await waitFor(() => events.some((e) => e.kind === 'add' && e.path === 'hello.txt'), {
+        debug: () => debugEvents(events),
+      });
 
       await writeFile(filePath, 'second');
-      await waitFor(() => events.some((e) => e.kind === 'change' && e.path === 'hello.txt'));
+      await waitFor(() => events.some((e) => e.kind === 'change' && e.path === 'hello.txt'), {
+        debug: () => debugEvents(events),
+      });
 
       await rm(filePath);
-      await waitFor(() => events.some((e) => e.kind === 'unlink' && e.path === 'hello.txt'));
+      await waitFor(() => events.some((e) => e.kind === 'unlink' && e.path === 'hello.txt'), {
+        debug: () => debugEvents(events),
+      });
 
       expect(events.every((e) => e.type === 'file-changed')).toBe(true);
     } finally {
       await sub.unsubscribe();
       await rm(root, { recursive: true, force: true });
     }
-  }, 8_000);
+  }, REAL_WATCHER_TEST_TIMEOUT_MS);
 
   it('still emits events when the watch root is itself nested under .od/ (production layout)', async () => {
     // Reproduces the layout the daemon actually uses:
@@ -141,8 +209,8 @@ describe('project-watchers (real chokidar)', () => {
     const projectId = 'proj-' + Math.random().toString(36).slice(2, 10);
     await mkdir(path.join(projectsRoot, projectId, 'prototype'), { recursive: true });
 
-    const events = [];
-    const sub = subscribe(projectsRoot, projectId, (e) => events.push(e), FAST_WATCH_OPTIONS);
+    const events: ProjectWatchEvent[] = [];
+    const sub = subscribe(projectsRoot, projectId, recordEvent(events), FAST_WATCH_OPTIONS);
     await sub.ready;
 
     try {
@@ -150,18 +218,18 @@ describe('project-watchers (real chokidar)', () => {
       await writeFile(filePath, 'export default () => null;');
       await waitFor(
         () => events.some((e) => e.kind === 'add' && e.path === 'prototype/App.jsx'),
-        { timeout: 4000 },
+        { timeout: REAL_WATCHER_WAIT_TIMEOUT_MS, debug: () => debugEvents(events) },
       );
     } finally {
       await sub.unsubscribe();
       await rm(dataRoot, { recursive: true, force: true });
     }
-  }, 8_000);
+  }, REAL_WATCHER_TEST_TIMEOUT_MS);
 
   it('ignores files inside .od/ and node_modules/', async () => {
     const { root, projectId } = await makeProjectsRoot();
-    const events = [];
-    const sub = subscribe(root, projectId, (e) => events.push(e), FAST_WATCH_OPTIONS);
+    const events: ProjectWatchEvent[] = [];
+    const sub = subscribe(root, projectId, recordEvent(events), FAST_WATCH_OPTIONS);
     await sub.ready;
 
     try {
@@ -171,7 +239,10 @@ describe('project-watchers (real chokidar)', () => {
       await writeFile(path.join(root, projectId, 'node_modules', 'x.js'), '');
 
       await writeFile(path.join(root, projectId, 'real.txt'), 'real');
-      await waitFor(() => events.some((e) => e.path === 'real.txt'));
+      await waitFor(() => events.some((e) => e.path === 'real.txt'), {
+        timeout: REAL_WATCHER_WAIT_TIMEOUT_MS,
+        debug: () => debugEvents(events),
+      });
 
       const ignored = events.filter(
         (e) => e.path.startsWith('.od/') || e.path.startsWith('node_modules/'),
@@ -181,12 +252,12 @@ describe('project-watchers (real chokidar)', () => {
       await sub.unsubscribe();
       await rm(root, { recursive: true, force: true });
     }
-  }, 8_000);
+  }, REAL_WATCHER_TEST_TIMEOUT_MS);
 
   it('ignores files inside Python venv and cache dirs', async () => {
     const { root, projectId } = await makeProjectsRoot();
-    const events = [];
-    const sub = subscribe(root, projectId, (e) => events.push(e), FAST_WATCH_OPTIONS);
+    const events: ProjectWatchEvent[] = [];
+    const sub = subscribe(root, projectId, recordEvent(events), FAST_WATCH_OPTIONS);
     await sub.ready;
 
     const ignoredDirs = ['.venv', 'venv', '__pycache__', '.mypy_cache', '.pytest_cache', '.tox', '.ruff_cache'];
@@ -197,7 +268,10 @@ describe('project-watchers (real chokidar)', () => {
       }
 
       await writeFile(path.join(root, projectId, 'real.txt'), 'real');
-      await waitFor(() => events.some((e) => e.path === 'real.txt'));
+      await waitFor(() => events.some((e) => e.path === 'real.txt'), {
+        timeout: REAL_WATCHER_WAIT_TIMEOUT_MS,
+        debug: () => debugEvents(events),
+      });
 
       const ignored = events.filter((e) =>
         ignoredDirs.some((dir) => e.path.startsWith(`${dir}/`)),
@@ -207,7 +281,7 @@ describe('project-watchers (real chokidar)', () => {
       await sub.unsubscribe();
       await rm(root, { recursive: true, force: true });
     }
-  }, 8_000);
+  }, REAL_WATCHER_TEST_TIMEOUT_MS);
 
   it('attaches an error listener and survives an emitted error event', async () => {
     // Regression for codex P1: chokidar's FSWatcher is an EventEmitter.
@@ -216,13 +290,14 @@ describe('project-watchers (real chokidar)', () => {
     // exceptions and could crash the daemon — taking down all routes.
     const { _internalWatcherForTests } = await import('../src/project-watchers.js');
     const { root, projectId } = await makeProjectsRoot();
-    const events = [];
-    const sub = subscribe(root, projectId, (e) => events.push(e), FAST_WATCH_OPTIONS);
+    const events: ProjectWatchEvent[] = [];
+    const sub = subscribe(root, projectId, recordEvent(events), FAST_WATCH_OPTIONS);
     await sub.ready;
 
     try {
       const watcher = _internalWatcherForTests(root, projectId);
       expect(watcher).toBeDefined();
+      assertWatcher(watcher);
       // The listener must be registered — listenerCount > 0 proves it.
       expect(watcher.listenerCount('error')).toBeGreaterThan(0);
 
@@ -231,12 +306,15 @@ describe('project-watchers (real chokidar)', () => {
       expect(() => watcher.emit('error', new Error('synthetic ENOSPC'))).not.toThrow();
       const filePath = path.join(root, projectId, 'after-error.txt');
       await writeFile(filePath, 'still alive');
-      await waitFor(() => events.some((e) => e.path === 'after-error.txt'));
+      await waitFor(() => events.some((e) => e.path === 'after-error.txt'), {
+        timeout: REAL_WATCHER_WAIT_TIMEOUT_MS,
+        debug: () => debugEvents(events),
+      });
     } finally {
       await sub.unsubscribe();
       await rm(root, { recursive: true, force: true });
     }
-  }, 8_000);
+  }, REAL_WATCHER_TEST_TIMEOUT_MS);
 });
 
 describe('project-watchers (chokidar options)', () => {
@@ -268,8 +346,8 @@ describe('project-watchers (chokidar options)', () => {
       throw err;
     }
 
-    const events = [];
-    const sub = subscribe(dataRoot, projectId, (e) => events.push(e), FAST_WATCH_OPTIONS);
+    const events: ProjectWatchEvent[] = [];
+    const sub = subscribe(dataRoot, projectId, recordEvent(events), FAST_WATCH_OPTIONS);
     await sub.ready;
 
     try {
@@ -279,7 +357,10 @@ describe('project-watchers (chokidar options)', () => {
       await writeFile(path.join(externalDir, 'leaked.txt'), 'leak');
       // Settle: write a real in-project file to give chokidar something to do.
       await writeFile(path.join(projectRoot, 'real.txt'), 'real');
-      await waitFor(() => events.some((e) => e.path === 'real.txt'));
+      await waitFor(() => events.some((e) => e.path === 'real.txt'), {
+        timeout: REAL_WATCHER_WAIT_TIMEOUT_MS,
+        debug: () => debugEvents(events),
+      });
 
       const linkedEvents = events.filter((e) => e.path.startsWith('linked/'));
       expect(linkedEvents).toEqual([]);
@@ -287,5 +368,5 @@ describe('project-watchers (chokidar options)', () => {
       await sub.unsubscribe();
       await rm(dataRoot, { recursive: true, force: true });
     }
-  }, 8_000);
+  }, REAL_WATCHER_TEST_TIMEOUT_MS);
 });

@@ -1,4 +1,3 @@
-// @ts-nocheck
 // Prompt template registry. Mirrors design-systems.js: scans
 // <projectRoot>/prompt-templates/{image,video}/*.json on every list call
 // and returns the parsed entries with light validation.
@@ -11,10 +10,31 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-const SUPPORTED_SURFACES = ['image', 'video'];
+const SUPPORTED_SURFACES = ['image', 'video'] as const;
+type PromptTemplateSurface = (typeof SUPPORTED_SURFACES)[number];
+type JsonRecord = Record<string, unknown>;
 
-export async function listPromptTemplates(root) {
-  const out = [];
+interface PromptTemplate {
+  id: string;
+  surface: PromptTemplateSurface;
+  title: string;
+  summary: string;
+  category: string;
+  tags: string[];
+  model?: string;
+  aspect?: string;
+  prompt: string;
+  previewImageUrl?: string;
+  previewVideoUrl?: string;
+  source: { repo: string; license: string; author?: string; url?: string };
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return Boolean(value) && typeof value === 'object';
+}
+
+export async function listPromptTemplates(root: string): Promise<PromptTemplate[]> {
+  const out: PromptTemplate[] = [];
   for (const surface of SUPPORTED_SURFACES) {
     const dir = path.join(root, surface);
     let entries = [];
@@ -50,9 +70,13 @@ export async function listPromptTemplates(root) {
   return out;
 }
 
-export async function readPromptTemplate(root, surface, id) {
-  if (!SUPPORTED_SURFACES.includes(surface)) return null;
-  const filePath = path.join(root, surface, `${id}.json`);
+export async function readPromptTemplate(root: string, surface: string, id: string): Promise<PromptTemplate | null> {
+  if (!isPromptTemplateSurface(surface)) return null;
+  const dir = path.join(root, surface);
+  const filePath = path.join(dir, `${id}.json`);
+  // `id` comes straight from the request path; a value like `../secret` would
+  // resolve outside the surface directory. Only read a direct child of it.
+  if (path.dirname(filePath) !== dir) return null;
   try {
     const raw = await readFile(filePath, 'utf8');
     const parsed = JSON.parse(raw);
@@ -62,8 +86,12 @@ export async function readPromptTemplate(root, surface, id) {
   }
 }
 
-function validateTemplate(raw, expectedSurface, fileName) {
-  if (!raw || typeof raw !== 'object') return null;
+function isPromptTemplateSurface(surface: string): surface is PromptTemplateSurface {
+  return (SUPPORTED_SURFACES as readonly string[]).includes(surface);
+}
+
+function validateTemplate(raw: unknown, expectedSurface: PromptTemplateSurface, fileName: string): PromptTemplate | null {
+  if (!isRecord(raw)) return null;
   if (typeof raw.id !== 'string' || !raw.id) {
     console.warn(`prompt-templates: ${fileName} missing id`);
     return null;
@@ -79,30 +107,37 @@ function validateTemplate(raw, expectedSurface, fileName) {
     console.warn(`prompt-templates: ${fileName} prompt too short`);
     return null;
   }
-  const source = raw.source && typeof raw.source === 'object' ? raw.source : null;
+  const source = isRecord(raw.source) ? raw.source : null;
   if (!source || typeof source.repo !== 'string' || typeof source.license !== 'string') {
     console.warn(`prompt-templates: ${fileName} missing source.repo / license`);
     return null;
   }
-  return {
+  // The list exposes `id` and readPromptTemplate() resolves `${id}.json`, so an
+  // id that drifts from its filename would advertise a template the detail
+  // endpoint can't open. Reject the mismatch during scan/read.
+  const expectedId = fileName.replace(/\.json$/, '');
+  if (raw.id !== expectedId) {
+    console.warn(`prompt-templates: ${fileName} id=${raw.id} ≠ filename`);
+    return null;
+  }
+  const template: PromptTemplate = {
     id: raw.id,
-    surface: raw.surface,
+    surface: expectedSurface,
     title: raw.title.trim(),
     summary: typeof raw.summary === 'string' ? raw.summary.trim() : '',
     category: typeof raw.category === 'string' ? raw.category : 'General',
-    tags: Array.isArray(raw.tags) ? raw.tags.filter((t) => typeof t === 'string') : [],
-    model: typeof raw.model === 'string' ? raw.model : undefined,
-    aspect: typeof raw.aspect === 'string' ? raw.aspect : undefined,
+    tags: Array.isArray(raw.tags) ? raw.tags.filter((t): t is string => typeof t === 'string') : [],
     prompt: raw.prompt.trim(),
-    previewImageUrl:
-      typeof raw.previewImageUrl === 'string' ? raw.previewImageUrl : undefined,
-    previewVideoUrl:
-      typeof raw.previewVideoUrl === 'string' ? raw.previewVideoUrl : undefined,
     source: {
       repo: source.repo,
       license: source.license,
-      author: typeof source.author === 'string' ? source.author : undefined,
-      url: typeof source.url === 'string' ? source.url : undefined,
     },
   };
+  if (typeof raw.model === 'string') template.model = raw.model;
+  if (typeof raw.aspect === 'string') template.aspect = raw.aspect;
+  if (typeof raw.previewImageUrl === 'string') template.previewImageUrl = raw.previewImageUrl;
+  if (typeof raw.previewVideoUrl === 'string') template.previewVideoUrl = raw.previewVideoUrl;
+  if (typeof source.author === 'string') template.source.author = source.author;
+  if (typeof source.url === 'string') template.source.url = source.url;
+  return template;
 }

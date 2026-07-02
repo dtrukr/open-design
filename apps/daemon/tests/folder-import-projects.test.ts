@@ -4,7 +4,35 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { detectEntryFile, listFiles, resolveProjectDir } from '../src/projects.js';
+import {
+  assertSandboxProjectRootAvailable,
+  detectEntryFile,
+  listFiles,
+  resolveProjectDir,
+  SandboxImportedProjectError,
+} from '../src/projects.js';
+
+function withSandboxMode<T>(run: () => T): T {
+  const previous = process.env.OD_SANDBOX_MODE;
+  process.env.OD_SANDBOX_MODE = '1';
+  try {
+    return run();
+  } finally {
+    if (previous == null) delete process.env.OD_SANDBOX_MODE;
+    else process.env.OD_SANDBOX_MODE = previous;
+  }
+}
+
+function withSandboxImportAllowedRoots<T>(roots: string[], run: () => T): T {
+  const previous = process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS;
+  process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS = roots.join(path.delimiter);
+  try {
+    return run();
+  } finally {
+    if (previous == null) delete process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS;
+    else process.env.OD_SANDBOX_IMPORT_ALLOWED_ROOTS = previous;
+  }
+}
 
 describe('resolveProjectDir', () => {
   const projectsRoot = '/var/od/projects';
@@ -49,6 +77,47 @@ describe('resolveProjectDir', () => {
         baseDir: '/Users/me/site',
       }),
     ).not.toThrow();
+  });
+
+  it('rejects metadata.baseDir in sandbox mode before resolving a project file root', () => {
+    withSandboxMode(() => {
+      const baseDir = '/Users/me/projects/site';
+      expect(
+        () => resolveProjectDir(projectsRoot, projectId, { kind: 'prototype', baseDir }),
+      ).toThrowError(SandboxImportedProjectError);
+      expect(() =>
+        assertSandboxProjectRootAvailable({ kind: 'prototype', baseDir }),
+      ).toThrowError(SandboxImportedProjectError);
+      expect(() => resolveProjectDir(projectsRoot, '../escape', {
+        kind: 'prototype',
+        baseDir,
+      })).toThrowError();
+    });
+  });
+
+  it('uses metadata.baseDir in sandbox mode when it is under an allowed import root', () => {
+    withSandboxMode(() => {
+      const baseDir = '/Users/me/scratch/od-clone/job-1';
+      withSandboxImportAllowedRoots(['/Users/me/scratch/od-clone'], () => {
+        expect(
+          resolveProjectDir(projectsRoot, projectId, { kind: 'prototype', baseDir }),
+        ).toBe(path.normalize(baseDir));
+        expect(() =>
+          assertSandboxProjectRootAvailable({ kind: 'prototype', baseDir }),
+        ).not.toThrow();
+      });
+    });
+  });
+
+  it('rejects relative sandbox import allowed roots', () => {
+    withSandboxMode(() => {
+      const baseDir = path.join(path.parse(process.cwd()).root, 'tmp', 'od-clone', 'job-1');
+      withSandboxImportAllowedRoots(['tmp'], () => {
+        expect(() =>
+          assertSandboxProjectRootAvailable({ kind: 'prototype', baseDir }),
+        ).toThrowError(/OD_SANDBOX_IMPORT_ALLOWED_ROOTS.*absolute/i);
+      });
+    });
   });
 });
 
@@ -105,6 +174,12 @@ describe('listFiles with metadata.baseDir', () => {
     await writeFile(path.join(baseDir, '.git', 'HEAD'), 'ref: refs/heads/main');
     await mkdir(path.join(baseDir, 'dist'));
     await writeFile(path.join(baseDir, 'dist', 'bundle.js'), '/*compiled*/');
+    await mkdir(path.join(baseDir, 'Build', 'DerivedData-KeeTests'), { recursive: true });
+    await writeFile(path.join(baseDir, 'Build', 'DerivedData-KeeTests', 'index-store'), '');
+    await mkdir(path.join(baseDir, 'vendor', 'package'), { recursive: true });
+    await writeFile(path.join(baseDir, 'vendor', 'package', 'generated.js'), '');
+    await mkdir(path.join(baseDir, 'Rust', 'KeePassCore', 'target', 'release'), { recursive: true });
+    await writeFile(path.join(baseDir, 'Rust', 'KeePassCore', 'target', 'release', 'libkeepass.a'), '');
     await mkdir(path.join(baseDir, 'src'));
     await writeFile(path.join(baseDir, 'src', 'app.ts'), 'export {}');
   });
@@ -150,16 +225,12 @@ describe('listFiles with metadata.baseDir', () => {
     expect(paths.some((p) => p.startsWith('node_modules/'))).toBe(false);
     expect(paths.some((p) => p.startsWith('.git/'))).toBe(false);
     expect(paths.some((p) => p.startsWith('dist/'))).toBe(false);
+    expect(paths.some((p) => p.startsWith('Build/'))).toBe(false);
+    expect(paths.some((p) => p.startsWith('vendor/'))).toBe(false);
+    expect(paths.some((p) => p.includes('/target/'))).toBe(false);
   });
 
-  it('does not skip those dirs for non-baseDir projects (back-compat)', async () => {
-    // Without metadata.baseDir, listFiles points at the standard project dir.
-    // We don't have one set up for this test — just assert the call doesn't
-    // *apply* the skip filter when the metadata is absent. We check this
-    // indirectly: passing the same baseDir as a non-baseDir directory
-    // (impossible here since listFiles uses standard path). So instead,
-    // verify the default path behavior is unchanged: no metadata, no
-    // skipDirs, no baseDir resolution.
+  it('skips dependency dirs for non-baseDir projects too', async () => {
     const standardDir = mkdtempSync(path.join(tmpdir(), 'od-list-std-'));
     try {
       await mkdir(path.join(standardDir, 'std-project'), { recursive: true });
@@ -169,9 +240,8 @@ describe('listFiles with metadata.baseDir', () => {
 
       const files = await listFiles(standardDir, 'std-project');
       const paths = files.map((f) => f.path).sort();
-      // node_modules contents *do* appear when no skip filter is applied
       expect(paths).toContain('main.html');
-      expect(paths).toContain('node_modules/a.js');
+      expect(paths).not.toContain('node_modules/a.js');
     } finally {
       rmSync(standardDir, { recursive: true, force: true });
     }

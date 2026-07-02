@@ -24,7 +24,6 @@ export type ArtifactExportKind =
   | 'html'
   | 'pdf'
   | 'zip'
-  | 'pptx'
   | 'jsx'
   | 'md'
   | 'svg'
@@ -42,6 +41,11 @@ export interface ArtifactManifest {
   // Frontend + daemon normalize missing status to "complete".
   status?: ArtifactStatus;
   exports: ArtifactExportKind[];
+  /**
+   * Optional primary entry hint for multi-file outputs. When omitted, clients
+   * may fall back to renderable-file heuristics.
+   */
+  primary?: string | boolean;
   /**
    * Reserved for future multi-file artifact packaging.
    * Current generators only persist a single entry file, so this is not yet populated.

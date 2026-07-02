@@ -1,4 +1,13 @@
-import type { DesktopEvalResult, DesktopScreenshotResult, DesktopStatusSnapshot } from "@open-design/sidecar-proto";
+import type {
+  DaemonStatusSnapshot,
+  DesktopEvalResult,
+  DesktopScreenshotResult,
+  DesktopStatusSnapshot,
+  DesktopUpdateResult,
+  WebStatusSnapshot,
+} from "@open-design/sidecar-proto";
+import type { ToolPackLauncherRuntimeSnapshot } from "../launcher-runtime-snapshot.js";
+import type { ToolPackUpdateCacheLifecycleSnapshot } from "../update-cache-lifecycle-snapshot.js";
 import type { CacheReport } from "../cache.js";
 import type { ToolPackConfig } from "../config.js";
 import type { INTERNAL_PACKAGES } from "./constants.js";
@@ -51,13 +60,22 @@ export type WinPaths = {
   assembledAppRoot: string;
   assembledMainEntryPath: string;
   assembledPackageJsonPath: string;
+  assembledPrebundledRoot: string;
   blockmapPath: string;
   builtManifestPath: string;
+  daemonCliPrebundleEntrypointPath: string;
+  daemonCliPrebundlePath: string;
+  daemonPrebundleMetaPath: string;
+  daemonPrebundleRoot: string;
+  daemonSidecarPrebundleEntrypointPath: string;
+  daemonSidecarPrebundlePath: string;
   exePath: string;
   installDir: string;
   installedExePath: string;
-  installerPayloadPath: string;
+  installerBasePayloadPath: string;
+  installerOverlayPayloadPath: string;
   installerScriptPath: string;
+  launcherPayloadPath: string;
   publicDesktopShortcutPath: string;
   latestYmlPath: string;
   installMarkerPath: string;
@@ -65,8 +83,11 @@ export type WinPaths = {
   nsisLogPath: string;
   nsisIncludePath: string;
   packagedConfigPath: string;
+  packagedMainPrebundleMetaPath: string;
+  packagedMainPrebundlePath: string;
   resourceRoot: string;
   setupPath: string;
+  setupZipPath: string;
   startMenuShortcutPath: string;
   tarballsRoot: string;
   userDesktopShortcutPath: string;
@@ -75,6 +96,8 @@ export type WinPaths = {
   uninstallerPath: string;
   webStandaloneHookAuditPath: string;
   webStandaloneHookConfigPath: string;
+  webSidecarPrebundleMetaPath: string;
+  webSidecarPrebundlePath: string;
   winIconPath: string;
   unpackedExePath: string;
   unpackedRoot: string;
@@ -85,9 +108,12 @@ export type WinPackResult = {
   installerPath: string | null;
   latestYmlPath: string | null;
   outputRoot: string;
+  payloadPath: string | null;
+  portableZipPath: string | null;
   resourceRoot: string;
   runtimeNamespaceRoot: string;
   cacheReport: CacheReport;
+  segments: WinPackTiming[];
   sizeReport: WinSizeReport;
   timings: WinPackTiming[];
   to: ToolPackConfig["to"];
@@ -96,6 +122,7 @@ export type WinPackResult = {
 };
 
 export type WinPackTiming = {
+  details?: Record<string, unknown>;
   durationMs: number;
   phase: string;
 };
@@ -112,12 +139,13 @@ export type WinSizeReport = {
     };
     nodeGypRebuild: boolean;
     npmRebuild: boolean;
-    targets: Array<"dir" | "nsis">;
+    targets: Array<"dir" | "nsis" | "zip">;
     webOutputMode: ToolPackConfig["webOutputMode"];
   };
   generatedAt: string;
   installerBytes: number | null;
   outputRootBytes: number;
+  portableZipBytes: number | null;
   resourceRootBytes: number;
   runtimeNamespaceRoot: string;
   topLevel: {
@@ -144,6 +172,7 @@ export type WinSizeReport = {
     markdownBytes: number;
     nextBytes: number;
     nextSwcBytes: number;
+    prebundledRuntimeBytes: number;
     sharpLibvipsBytes: number;
     sourcemapBytes: number;
     tsbuildInfoBytes: number;
@@ -163,6 +192,7 @@ export type WinInstallResult = {
   desktopShortcutExists: boolean;
   desktopShortcutPath: string;
   installDir: string;
+  lifecycleTimings: WinLifecycleTiming[];
   installerPath: string;
   installPayload: WinInstallPayloadReport;
   markerPath: string;
@@ -185,6 +215,11 @@ export type WinInstallPayloadReport = {
   }>;
 };
 
+export type WinLifecycleTiming = {
+  durationMs: number;
+  step: string;
+};
+
 export type WinStartResult = {
   executablePath: string;
   logPath: string;
@@ -192,6 +227,22 @@ export type WinStartResult = {
   pid: number;
   source: "built" | "installed";
   status: DesktopStatusSnapshot | null;
+};
+
+export type WinIpcDiagnoseAttempt = {
+  attempt: number;
+  durationMs: number;
+  start: WinStartResult;
+  statusPoll: WinInspectStatusPollResult;
+  stop: WinStopResult;
+};
+
+export type WinIpcDiagnoseResult = {
+  attempts: WinIpcDiagnoseAttempt[];
+  namespace: string;
+  statusPollCount: number;
+  statusPollIntervalMs: number;
+  traceEnabled: boolean;
 };
 
 export type WinStopResult = {
@@ -203,9 +254,11 @@ export type WinStopResult = {
 };
 
 export type WinUninstallResult = {
+  lifecycleTimings: WinLifecycleTiming[];
   markerPath: string;
   namespace: string;
   nsisLogPath: string;
+  removedCacheRoot: boolean;
   registryResiduesRemoved: string[];
   removedDataRoot: boolean;
   removedLogsRoot: boolean;
@@ -220,7 +273,9 @@ export type WinUninstallResult = {
 
 export type WinCleanupResult = {
   namespace: string;
+  removedLauncherNamespaceRoot: boolean;
   removedOutputRoot: boolean;
+  removedCacheRoot: boolean;
   removedProductUserDataRoot: boolean;
   removedRuntimeNamespaceRoot: boolean;
   removalPlan: WinRemovalTarget[];
@@ -256,7 +311,7 @@ export type WinResidueObservation = {
 export type WinRemovalTarget = {
   exists: boolean;
   path: string;
-  scope: "data" | "logs" | "product-user-data" | "sidecars";
+  scope: "cache" | "data" | "logs" | "product-user-data" | "sidecars";
   willRemove: boolean;
 };
 
@@ -299,7 +354,44 @@ export type WinResetResult = {
 };
 
 export type WinInspectResult = {
+  daemonStatus: DaemonStatusSnapshot | null;
+  daemonStatusError?: string;
   eval?: DesktopEvalResult;
+  launcher: ToolPackLauncherRuntimeSnapshot;
+  launcherSource: {
+    kind: "tools-pack-runtime";
+    note: string;
+    root: string;
+  };
   screenshot?: DesktopScreenshotResult;
   status: DesktopStatusSnapshot | null;
+  statusError?: string;
+  statusPoll?: WinInspectStatusPollResult;
+  updateCache: ToolPackUpdateCacheLifecycleSnapshot;
+  updateCacheSource: {
+    kind: "tools-pack-runtime";
+    note: string;
+    root: string;
+  };
+  update?: DesktopUpdateResult;
+  webStatus: WebStatusSnapshot | null;
+  webStatusError?: string;
+};
+
+export type WinInspectStatusPollSample = {
+  attempt: number;
+  daemonStatus: DaemonStatusSnapshot | null;
+  daemonStatusError?: string;
+  durationMs: number;
+  startedAt: string;
+  status: DesktopStatusSnapshot | null;
+  statusError?: string;
+  webStatus: WebStatusSnapshot | null;
+  webStatusError?: string;
+};
+
+export type WinInspectStatusPollResult = {
+  count: number;
+  intervalMs: number;
+  samples: WinInspectStatusPollSample[];
 };

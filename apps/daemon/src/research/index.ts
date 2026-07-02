@@ -3,7 +3,7 @@ import type {
   ResearchFindings,
   ResearchSource,
 } from '@open-design/contracts/api/research';
-import { resolveProviderConfig } from '../media-config.js';
+import { resolveProviderConfig } from '../media/config.js';
 import { tavilySearch, TavilyError } from './tavily.js';
 
 const DEFAULT_MAX_SOURCES = 5;
@@ -25,6 +25,7 @@ export interface SearchResearchInput {
   projectRoot: string;
   maxSources?: number;
   providers?: string[];
+  requestInit?: Pick<RequestInit, 'dispatcher'>;
   signal?: AbortSignal;
 }
 
@@ -70,6 +71,7 @@ export async function searchResearch(
       maxResults: maxSources,
       includeAnswer: true,
       ...(cfg.baseUrl ? { baseUrl: cfg.baseUrl } : {}),
+      ...(input.requestInit ? { requestInit: input.requestInit } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
     });
     answer = out.answer;

@@ -1,5 +1,9 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { motion } from 'motion/react';
+import { Button, Input, Textarea } from '@open-design/components';
 import { useT } from '../i18n';
+import { modalOverlay, modalContent } from '../motion';
 
 interface Props {
   onSave: (name: string, content: string) => void;
@@ -18,14 +22,28 @@ export function PasteTextDialog({ onSave, onClose }: Props) {
     onSave(ensureExtension(finalName, '.txt'), content);
   }
 
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+  const dialog = (
+    <motion.div
+      className="modal-backdrop paste-text-dialog-backdrop"
+      onClick={onClose}
+      variants={modalOverlay}
+      initial="hidden"
+      animate="visible"
+      exit="exit"
+    >
+      <motion.div
+        className="modal"
+        onClick={(e) => e.stopPropagation()}
+        variants={modalContent}
+        initial="hidden"
+        animate="visible"
+        exit="exit"
+      >
         <h2>{t('pasteDialog.title')}</h2>
         <p className="hint">{t('pasteDialog.hint')}</p>
         <label>
           {t('pasteDialog.fileNameLabel')}
-          <input
+          <Input
             type="text"
             value={name}
             placeholder={t('pasteDialog.namePlaceholder')}
@@ -35,7 +53,7 @@ export function PasteTextDialog({ onSave, onClose }: Props) {
         </label>
         <label>
           {t('pasteDialog.contentLabel')}
-          <textarea
+          <Textarea
             rows={10}
             value={content}
             placeholder={t('pasteDialog.contentPlaceholder')}
@@ -43,14 +61,17 @@ export function PasteTextDialog({ onSave, onClose }: Props) {
           />
         </label>
         <div className="row">
-          <button onClick={onClose}>{t('pasteDialog.cancel')}</button>
-          <button className="primary" onClick={commit} disabled={!content.trim()}>
+          <Button onClick={onClose}>{t('pasteDialog.cancel')}</Button>
+          <Button variant="primary" onClick={commit} disabled={!content.trim()}>
             {t('pasteDialog.save')}
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
+
+  if (typeof document === 'undefined') return dialog;
+  return createPortal(dialog, document.body);
 }
 
 function ensureExtension(name: string, ext: string): string {

@@ -1418,11 +1418,11 @@ git commit -m "feat(daemon): branch agent spawn through critique orchestrator wh
 
 ## Phase 5: Prompt protocol addendum
 
-### Task 5.1: Implement `apps/web/src/prompts/panel.ts`
+### Task 5.1: Implement `apps/daemon/src/prompts/panel.ts`
 
 **Files:**
-- Create: `apps/web/src/prompts/panel.ts`
-- Test: `apps/web/tests/prompts/panel.test.ts`
+- Create: `apps/daemon/src/prompts/panel.ts`
+- Test: `apps/daemon/tests/prompts/panel.test.ts`
 
 - [ ] **Step 1: Failing snapshot test**
 
@@ -1466,7 +1466,7 @@ describe('renderPanelPrompt', () => {
 - [ ] **Step 3: Implement**
 
 ```ts
-// apps/web/src/prompts/panel.ts
+// apps/daemon/src/prompts/panel.ts
 import { type CritiqueConfig, PROTOCOL_VERSION } from '@open-design/contracts/critique';
 
 export interface PanelRenderInput {
@@ -1530,25 +1530,25 @@ Skill: ${skill.id}.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/prompts/panel.ts apps/web/tests/prompts/panel.test.ts
+git add apps/daemon/src/prompts/panel.ts apps/daemon/tests/prompts/panel.test.ts
 git commit -m "feat(web): add Critique Theater prompt protocol addendum"
 ```
 
 ### Task 5.2: Compose `panel.ts` into the existing prompt pipeline
 
 **Files:**
-- Modify: `apps/web/src/prompts/discovery.ts` (existing)
+- Modify: `apps/daemon/src/prompts/discovery.ts` (existing)
 
 - [ ] **Step 1: Read existing composer to learn append point**
 
 ```bash
-grep -n "compose\|render\|prompt" apps/web/src/prompts/discovery.ts | head -20
+grep -n "compose\|render\|prompt" apps/daemon/src/prompts/discovery.ts | head -20
 ```
 
 - [ ] **Step 2: Add failing test that final composed prompt contains PROTOCOL block**
 
 ```ts
-// apps/web/tests/prompts/discovery.test.ts (extend)
+// apps/daemon/tests/prompts/discovery.test.ts (extend)
 it('appends Critique Theater protocol when cfg.enabled', () => {
   const out = composeDiscoveryPrompt({ ...input, critique: { enabled: true } });
   expect(out).toContain('<CRITIQUE_RUN');
@@ -1582,7 +1582,7 @@ pnpm --filter @open-design/web test discovery.test.ts
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/prompts
+git add apps/daemon/src/prompts
 git commit -m "feat(web): wire panel prompt addendum into discovery composer"
 ```
 
@@ -1916,9 +1916,9 @@ git commit -m "feat(web,daemon): Settings toggle Critique Theater (beta)"
 
 ### Adapter test matrix and pass criteria
 
-The conformance harness runs against every adapter listed `status: production` in `docs/agent-adapters.md`. v1 production adapters: `claude-code`, `codex`, `cursor-agent`, `gemini-cli`, `devin`, `opencode`, `qwen-code`, `copilot-cli`, `hermes-acp`, `kimi-acp`, `pi-rpc`, `kiro-acp`, plus the `byok-proxy` fallback. Adapters in `status: experimental` are run nightly but do not block the per-adapter green badge.
+The conformance harness runs against every adapter listed `status: production` in `docs/agent-adapters.md`. v1 production adapters: `claude-code`, `codex`, `cursor-agent`, `gemini-cli`, `devin`, `opencode`, `qwen-code`, `copilot-cli`, `hermes-acp`, `kimi-acp`, `pi-rpc`, `kiro-acp`, plus the `byok-proxy` fallback. Adapters in `status: experimental` are run prerelease but do not block the per-adapter green badge.
 
-**Brief templates** (10 templates × 13 adapters = 130 runs per nightly cycle):
+**Brief templates** (10 templates × 13 adapters = 130 runs per prerelease cycle):
 
 | Template | Skill | Stresses |
 | --- | --- | --- |
@@ -1933,7 +1933,7 @@ The conformance harness runs against every adapter listed `status: production` i
 | `t09_cjk_copy` | social-carousel | Japanese copy, exercises i18n in copy review |
 | `t10_three_round_grind` | dating-web | brief that empirically requires all 3 rounds to converge |
 
-**Pass criteria per adapter:** ≥ 90% of the 10 brief templates complete with `critique_status='shipped'` within `totalTimeoutMs`, and ≥ 95% of those parse cleanly (zero `MalformedBlockError`, `OversizeBlockError`, or `MissingArtifactError`). Any adapter that drops under either threshold for two consecutive nightly cycles is automatically marked `critique:degraded` with TTL = 24 hours; the operator gets one alert per adapter at the first failure.
+**Pass criteria per adapter:** ≥ 90% of the 10 brief templates complete with `critique_status='shipped'` within `totalTimeoutMs`, and ≥ 95% of those parse cleanly (zero `MalformedBlockError`, `OversizeBlockError`, or `MissingArtifactError`). Any adapter that drops under either threshold for two consecutive prerelease cycles is automatically marked `critique:degraded` with TTL = 24 hours; the operator gets one alert per adapter at the first failure.
 
 **Retry budget:** any single template that emits `critique.degraded` is retried once with the same brief and adapter. Two consecutive `degraded` runs count as one failure for the rate calculation. Templates that emit `critique.interrupted` due to user action do not count toward conformance (interrupts are user-initiated, not adapter regressions).
 

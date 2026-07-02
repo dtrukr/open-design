@@ -88,7 +88,7 @@ Phased plan from "spec-only today" to "usable MVP" to "published v1." All estima
 3. Without Claude Code installed: API-fallback produces prototypes (not decks — guizang-ppt-skill needs native skill loading).
 4. A user can drop a DESIGN.md into the project root and subsequent generations respect it.
 5. A third party can publish a skill repo; `od skill add <url>` installs it and it works.
-6. Artifacts are plain files; `git add ./.od/artifacts/` and `git log` tell a sensible story.
+6. Artifacts are plain files. This roadmap MUST NOT define daemon data paths; read the root `AGENTS.md` section **Daemon data directory contract** before changing or documenting artifact storage.
 7. No Electron, no Tauri, no desktop packaging anywhere in the repo.
 
 ---
@@ -162,6 +162,47 @@ Phased plan from "spec-only today" to "usable MVP" to "published v1." All estima
 - Hosted SaaS offering (optional; full-local stays primary)
 
 v2 isn't promised. It's the direction if v1 lands.
+
+## Self-evolution track
+
+The newer Automations direction is tracked in
+[`specs/current/automation-self-evolution.md`](../specs/current/automation-self-evolution.md).
+It folds routines, scheduled connector digests, live-artifact refreshes, Orbit,
+memory extraction, skill creation, token compression, and design-system
+extraction into one Automation template model.
+
+Milestones:
+
+| Milestone | Deliverable |
+|---|---|
+| SE0 | Contracts for source packets, automation templates, evolution proposals, memory tree nodes, and compression reports. |
+| SE1 | Editable memory tree that agents actually consume through the daemon and BYOK/API-mode prompt resolver. |
+| SE2 | Automation template registry exposed in both web UI and `od automation`. |
+| SE3 | Design-system extraction and skill crystallization proposals with review gates. |
+| SE4 | Connector-driven ingestion into memory/design-system/skill proposals with provenance. |
+| SE5 | Optional token compression with before/after token reports and rollback-safe stored originals. |
+
+SE1 starts from the existing Markdown memory store: `/api/memory/tree` and
+`od memory tree list/view/edit/move` expose a derived editable tree while the
+same selected entries continue feeding daemon and BYOK/API-mode prompts.
+
+SE2 also includes the first review gate: `/api/automation-proposals` plus
+`od automation proposal list/get/apply/reject` can review memory-node, skill,
+and design-system proposals. Accepted memory proposals write into the memory
+tree; accepted skill and design-system proposals write reviewed drafts under
+the user-owned runtime roots.
+
+SE3/SE4 start closing the source loop through `/api/automation-ingestions`,
+`/api/automation-source-packets`, and `od automation source ingest/list/get`.
+The Automations page now has a source-ingestion panel that can turn pasted
+connector/repo/artifact/chat context into stored source packets plus reviewable
+memory, skill, and design-system proposals. Each ingestion can choose
+off/balanced/aggressive compression and records before/after token counts while
+preserving the original packet.
+
+Exit criteria: a connected or uploaded source can become reviewable memory,
+skill, and design-system proposals; accepted proposals are visible in the tree
+and are consumed by a later agent run without extra prompting.
 
 ---
 

@@ -33,7 +33,6 @@ const ALLOWED_EXPORTS: ReadonlySet<ArtifactExportKind> = new Set([
   'html',
   'pdf',
   'zip',
-  'pptx',
   'jsx',
   'md',
   'svg',
@@ -57,7 +56,7 @@ function inferKindFromEntry(entry: string): ArtifactKind | null {
 }
 
 function exportsForKind(kind: ArtifactKind): ArtifactExportKind[] {
-  if (kind === 'deck') return ['html', 'pdf', 'pptx', 'zip'];
+  if (kind === 'deck') return ['html', 'pdf', 'zip'];
   if (kind === 'react-component') return ['jsx', 'html', 'zip'];
   if (kind === 'markdown-document') return ['md', 'html', 'pdf', 'zip'];
   if (kind === 'svg' || kind === 'diagram') return ['svg', 'zip'];
@@ -85,6 +84,7 @@ export function createHtmlArtifactManifest(input: {
     renderer: 'html',
     status: 'complete',
     exports: ['html', 'pdf', 'zip'],
+    primary: true,
     createdAt: now,
     updatedAt: now,
     sourceSkillId: input.sourceSkillId,
@@ -124,6 +124,10 @@ export function parseArtifactManifest(raw: string): ArtifactManifest | null {
         ? (parsed.status as ArtifactStatus)
         : 'complete',
       exports: parsed.exports as ArtifactExportKind[],
+      primary:
+        parsed.primary === true || typeof parsed.primary === 'string'
+          ? parsed.primary
+          : undefined,
       supportingFiles: Array.isArray(parsed.supportingFiles)
         ? parsed.supportingFiles.filter((x): x is string => typeof x === 'string')
         : undefined,
@@ -178,6 +182,7 @@ export function inferLegacyManifest(input: {
     renderer,
     status: 'complete',
     exports: exportsForKind(resolvedKind),
+    primary: resolvedKind === 'html' || resolvedKind === 'deck' ? true : undefined,
     metadata: input.metadata,
   };
 }

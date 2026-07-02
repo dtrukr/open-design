@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { decideAutoOpenAfterWrite } from '../../src/components/auto-open-file';
+import {
+  decideAutoOpenAfterWrite,
+  selectAutoOpenProducedArtifact,
+} from '../../src/components/auto-open-file';
 
 describe('decideAutoOpenAfterWrite', () => {
   it('returns shouldOpen=false when filePath is empty', () => {
@@ -97,5 +100,101 @@ describe('decideAutoOpenAfterWrite', () => {
       { name: 'lib/App.jsx', path: 'lib/App.jsx' },
     ]);
     expect(result).toEqual({ shouldOpen: false, fileName: null });
+  });
+
+  it('declines to auto-open a .jsx module loaded by a sibling HTML entry', () => {
+    // icons.jsx is a module of a multi-file React prototype (loaded by
+    // "Backups Panel.html" via <script type="text/babel" src>). It has no
+    // standalone preview, so auto-opening it strands the user on a dead-end
+    // tab. Issue #2744.
+    const result = decideAutoOpenAfterWrite(
+      'icons.jsx',
+      [
+        { name: 'icons.jsx', path: 'icons.jsx' },
+        { name: 'Backups Panel.html', path: 'Backups Panel.html' },
+      ],
+      { moduleFileNames: new Set(['icons.jsx']) },
+    );
+    expect(result).toEqual({ shouldOpen: false, fileName: null });
+  });
+
+  it('still auto-opens the same file when no module set is supplied (back-compat)', () => {
+    // Proves the suppression is driven solely by moduleFileNames: the legacy
+    // two-arg call path is unchanged, so this test goes red if the guard ever
+    // suppresses unconditionally.
+    const result = decideAutoOpenAfterWrite('icons.jsx', [
+      { name: 'icons.jsx', path: 'icons.jsx' },
+    ]);
+    expect(result).toEqual({ shouldOpen: true, fileName: 'icons.jsx' });
+  });
+
+  it('still auto-opens a standalone artifact even when other modules exist', () => {
+    const result = decideAutoOpenAfterWrite(
+      'landing.html',
+      [
+        { name: 'landing.html', path: 'landing.html' },
+        { name: 'icons.jsx', path: 'icons.jsx' },
+      ],
+      { moduleFileNames: new Set(['icons.jsx']) },
+    );
+    expect(result).toEqual({ shouldOpen: true, fileName: 'landing.html' });
+  });
+});
+
+describe('selectAutoOpenProducedArtifact', () => {
+  it('selects a newly produced html file for the turn-end auto-open fallback', () => {
+    const result = selectAutoOpenProducedArtifact([
+      { name: 'notes.txt', path: 'notes.txt', kind: 'text', mtime: 20 },
+      { name: 'mutuals-v2.html', path: 'mutuals-v2.html', kind: 'html', mtime: 30 },
+    ]);
+
+    expect(result).toBe('mutuals-v2.html');
+  });
+
+  it('prefers the newest produced html file when a turn writes multiple html files', () => {
+    const result = selectAutoOpenProducedArtifact([
+      { name: 'index.html', path: 'index.html', kind: 'html', mtime: 10 },
+      { name: 'mutuals-v2.html', path: 'mutuals-v2.html', kind: 'html', mtime: 30 },
+    ]);
+
+    expect(result).toBe('mutuals-v2.html');
+  });
+
+  it('auto-opens a produced markdown document (plan/report) when no html exists', () => {
+    // Plan mode: the turn produces only `plan.md`. It renders inline in the
+    // viewer, so it must auto-open rather than leave the viewer empty.
+    const result = selectAutoOpenProducedArtifact([
+      { name: 'plan.md', path: 'plan.md', kind: 'text', mtime: 30 },
+    ]);
+
+    expect(result).toBe('plan.md');
+  });
+
+  it('prefers the html page over a markdown note written in the same turn', () => {
+    // Even when the markdown file is the most recently written, the primary
+    // visual deliverable (html) takes focus.
+    const result = selectAutoOpenProducedArtifact([
+      { name: 'index.html', path: 'index.html', kind: 'html', mtime: 10 },
+      { name: 'README.md', path: 'README.md', kind: 'text', mtime: 30 },
+    ]);
+
+    expect(result).toBe('index.html');
+  });
+
+  it('leaves a plain .txt file alone (text kind is shared with markdown)', () => {
+    // `.md` and `.txt` both arrive as kind: 'text'; only markdown should open.
+    const result = selectAutoOpenProducedArtifact([
+      { name: 'notes.txt', path: 'notes.txt', kind: 'text', mtime: 30 },
+    ]);
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when the produced files are not previewable', () => {
+    const result = selectAutoOpenProducedArtifact([
+      { name: 'deck.pptx', path: 'deck.pptx', kind: 'presentation', mtime: 30 },
+    ]);
+
+    expect(result).toBeNull();
   });
 });

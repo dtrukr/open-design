@@ -1,7 +1,21 @@
-import type { ChatRequest } from './api/chat';
+import type { ChatRequest, ChatRunStatusResponse } from './api/chat';
+import type {
+  AutomationCompressionReport,
+  AutomationContentPacket,
+  AutomationEvolutionProposal,
+  AutomationSourceIngestionResponse,
+  AutomationTemplate,
+  MemoryTreeNode,
+} from './api/automations';
 import type { ConnectorDetail } from './api/connectors';
-import type { ProjectFile } from './api/files';
+import {
+  PROJECT_EXPORT_MANIFEST_SCHEMA,
+  buildProjectRawFileUrl,
+  type ProjectExportManifestResponse,
+  type ProjectFile,
+} from './api/files';
 import type { LiveArtifact, LiveArtifactCreateInput, LiveArtifactUpdateInput } from './api/live-artifacts';
+import { DEFAULT_MEDIA_EXECUTION_POLICY } from './api/media';
 import type { HealthResponse } from './api/registry';
 import type { ApiErrorResponse, ApiValidationErrorDetails } from './errors';
 import type { ChatSseEvent } from './sse/chat';
@@ -10,6 +24,7 @@ import type { ProxySseEvent } from './sse/proxy';
 export const exampleChatRequest: ChatRequest = {
   agentId: 'claude',
   message: '## user\nCreate a design',
+  currentPrompt: 'Create a design',
   systemPrompt: 'Design carefully.',
   projectId: 'project_1',
   attachments: ['brief.pdf'],
@@ -48,6 +63,64 @@ export const exampleApiErrorResponse: ApiErrorResponse = {
   },
 };
 
+export const exampleMediaExecutionDisabledErrorResponse: ApiErrorResponse = {
+  error: {
+    code: 'MEDIA_EXECUTION_DISABLED',
+    message: 'media generation is disabled for this run',
+    retryable: false,
+  },
+};
+
+export const exampleChatRunStatusResponse: ChatRunStatusResponse = {
+  id: 'run_1',
+  projectId: 'project_1',
+  conversationId: 'conversation_1',
+  assistantMessageId: 'assistant_1',
+  agentId: 'codex',
+  designSystemId: 'default',
+  designSystemRequestedId: 'default',
+  designSystemSelectionSource: 'project',
+  designSystemDigest: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  status: 'succeeded',
+  createdAt: 1_717_200_000_000,
+  updatedAt: 1_717_200_030_000,
+  exitCode: 0,
+  signal: null,
+  error: null,
+  errorCode: null,
+  eventsLogPath: null,
+  mediaExecution: DEFAULT_MEDIA_EXECUTION_POLICY,
+  toolBundle: { mcpServers: [] },
+  promptCache: {
+    stablePromptHash: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+    hit: false,
+    missReason: 'new-session',
+  },
+};
+
+export const exampleProjectExportManifestResponse: ProjectExportManifestResponse = {
+  schema: PROJECT_EXPORT_MANIFEST_SCHEMA,
+  projectId: 'project_1',
+  projectName: 'Launch prototype',
+  generatedAt: '2026-06-01T00:00:00.000Z',
+  entryFile: 'index.html',
+  files: [
+    {
+      ...exampleProjectFile,
+      included: true,
+      role: 'entry',
+      reasons: ['project-entry-file'],
+    },
+  ],
+  artifacts: [],
+};
+
+export const exampleProjectRawPreviewUrl = buildProjectRawFileUrl(
+  'http://127.0.0.1:17456',
+  'project_1',
+  'screens/main page.html',
+) ?? '';
+
 const exampleLiveArtifactValidationDetails: ApiValidationErrorDetails = {
   kind: 'validation',
   issues: [
@@ -69,6 +142,105 @@ export const exampleLiveArtifactValidationErrorResponse: ApiErrorResponse = {
 };
 
 export const exampleHealthResponse: HealthResponse = { ok: true, service: 'daemon' };
+
+export const exampleAutomationTemplate: AutomationTemplate = {
+  id: 'extract-design-system',
+  title: 'Extract design system',
+  description: 'Turn a trusted source into a reviewable DESIGN.md proposal.',
+  purpose: 'Self-evolve project visual direction from source material and strong artifacts.',
+  triggerKinds: ['manual', 'connector', 'project-event'],
+  sourceKinds: ['upload', 'url', 'repo', 'connector', 'artifact'],
+  stages: [
+    { id: 'ingest', kind: 'ingest', title: 'Ingest source' },
+    { id: 'canonicalize', kind: 'canonicalize', title: 'Canonicalize to Markdown' },
+    { id: 'compress', kind: 'compress', title: 'Compact source context' },
+    { id: 'propose', kind: 'propose', title: 'Draft DESIGN.md proposal' },
+  ],
+  outputSinks: ['design-system', 'memory'],
+  reviewPolicy: 'always',
+  tokenCompression: 'balanced',
+  tags: ['self-evolution', 'design-system'],
+};
+
+export const exampleAutomationContentPacket: AutomationContentPacket = {
+  id: 'packet_design_source_1',
+  sourceEventId: 'source_event_1',
+  sourceKind: 'repo',
+  sourceRef: 'https://github.com/acme/design-system',
+  title: 'Acme design system README',
+  capturedAt: '2026-05-18T02:00:00.000Z',
+  bodyMarkdown: '# Acme Design\n\nPrimary color: #335CFF\n\nUse dense enterprise dashboards.',
+  provenance: [
+    {
+      kind: 'repo',
+      label: 'acme/design-system README',
+      ref: 'README.md',
+      url: 'https://github.com/acme/design-system/blob/main/README.md',
+    },
+  ],
+  attachments: [],
+  sensitivity: 'workspace',
+  capabilityHints: ['connector:github'],
+  tokenStats: {
+    originalTokens: 4200,
+    canonicalTokens: 1800,
+    compressedTokens: 720,
+    compressionRatio: 0.4,
+  },
+  candidateSinks: ['memory', 'design-system'],
+};
+
+export const exampleAutomationCompressionReport: AutomationCompressionReport = {
+  mode: 'balanced',
+  status: 'applied',
+  beforeTokens: 1800,
+  afterTokens: 720,
+  summary: 'Removed boilerplate and kept brand tokens, component rules, and source links.',
+  preservedSourcePacketId: 'packet_design_source_1',
+};
+
+export const exampleMemoryTreeNode: MemoryTreeNode = {
+  id: 'memory_node_acme_design',
+  parentId: 'memory_node_design_systems',
+  path: 'design-systems/acme/README.md',
+  name: 'Acme design source notes',
+  description: 'Source-backed brand and component rules extracted from Acme materials.',
+  kind: 'entry',
+  type: 'project',
+  scope: 'design-system',
+  sourcePacketIds: ['packet_design_source_1'],
+  proposalIds: ['proposal_acme_design_system_1'],
+  createdAt: '2026-05-18T02:01:00.000Z',
+  updatedAt: '2026-05-18T02:01:00.000Z',
+};
+
+export const exampleAutomationEvolutionProposal: AutomationEvolutionProposal = {
+  id: 'proposal_acme_design_system_1',
+  title: 'Create Acme DESIGN.md',
+  summary: 'Draft a design system from the Acme repo source packet.',
+  targetKind: 'design-system',
+  action: 'create',
+  status: 'pending-review',
+  reviewPolicy: 'always',
+  createdAt: '2026-05-18T02:02:00.000Z',
+  updatedAt: '2026-05-18T02:02:00.000Z',
+  sourcePacketIds: ['packet_design_source_1'],
+  automationRunId: 'automation_run_1',
+  targetRef: 'design-systems/acme/DESIGN.md',
+  patch: {
+    format: 'markdown',
+    after: '# Acme Design System\n\n> Category: Productivity & SaaS\n\n## 1. Visual Theme & Atmosphere\n\nDense enterprise dashboards with crisp blue actions.',
+    diffSummary: 'Creates a new DESIGN.md proposal from the ingested source packet.',
+  },
+  confidence: 0.82,
+  compressionReport: exampleAutomationCompressionReport,
+};
+
+export const exampleAutomationSourceIngestionResponse: AutomationSourceIngestionResponse = {
+  packet: exampleAutomationContentPacket,
+  compressionReport: exampleAutomationCompressionReport,
+  proposals: [exampleAutomationEvolutionProposal],
+};
 
 export const exampleLiveArtifact: LiveArtifact = {
   schemaVersion: 1,
@@ -126,6 +298,7 @@ export const exampleConnectorDetail: ConnectorDetail = {
   category: 'developer',
   description: 'Search repositories, issues, pull requests, commits, and releases from a connected GitHub account via Composio.',
   status: 'available',
+  toolCount: 1,
   tools: [
     {
       name: 'github.search_issues_and_pull_requests',
@@ -146,6 +319,8 @@ export const exampleConnectorDetail: ConnectorDetail = {
     },
   ],
   auth: { provider: 'composio', configured: false },
+  allowedToolNames: ['github.search_issues_and_pull_requests'],
+  curatedToolNames: ['github.search_issues_and_pull_requests'],
   featuredToolNames: ['github.search_issues_and_pull_requests'],
   minimumApproval: 'auto',
 };
